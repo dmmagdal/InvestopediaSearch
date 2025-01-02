@@ -1,0 +1,3 @@
+[submodule "InvestopediaDownload"]
+	path = InvestopediaDownload
+	url = https://github.com/dmmagdal/InvestopediaDownload
