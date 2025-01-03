@@ -16,13 +16,13 @@ import os
 import pyarrow as pa
 import shutil
 import string
-import sys
 from typing import List, Dict, Tuple
 
 from bs4 import BeautifulSoup
 from bs4.element import Tag, NavigableString
 import lancedb
 import msgpack
+import nltk
 from nltk.corpus import stopwords
 from nltk.stem import PorterStemmer, WordNetLemmatizer
 from nltk.tokenize import word_tokenize
@@ -53,6 +53,8 @@ def process_page(page: Tag | NavigableString) -> str:
 
 	# Locate the title and text tags (expect to have 1 of each per 
 	# article/page).
+	print(page.text)
+	exit()
 	title_tag = page.find("title")
 	text_tag = page.find("text")
 
@@ -848,11 +850,13 @@ def main() -> None:
 		[
 			os.path.join(
 				submodule_data_dir, 
-				expanded_article_map[article]["path"]
-			) 
+				expanded_article_map[article]["path"][6:]
+			)
 			for article in expanded_article_map
 		]
 	)
+	print(data_files[0])
+	exit(0)
 	if len(data_files) == 0:
 		print(f"InvestopediaDownload submodule has not extracted any articles from the downloader.")
 		print(f"Follow the README.md in the InvestopediaDownload submodule for instructions on how to download and extract articles from wikipedia.")
@@ -862,7 +866,7 @@ def main() -> None:
 	# NLTK SETUP
 	###################################################################
 	# Download packages from nltk.
-	# nltk.download("stopwords")
+	nltk.download("stopwords")
 
 	###################################################################
 	# EMBEDDING MODEL SETUP
