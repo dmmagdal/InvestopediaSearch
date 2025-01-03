@@ -67,6 +67,20 @@
             "max_tokens": 512,
             "dims": 768
         },
+        "modernbert-base": {
+            "model_id": "answerdotai/ModernBERT-base",
+            "cache_dir": "modernbert-base_cache",
+            "storage_dir": "modernbert-base",
+            "max_tokens": 8192,
+            "dims": 768
+        },
+        "modernbert-large": {
+            "model_id": "answerdotai/ModernBERT-large",
+            "cache_dir": "modernbert-large_cache",
+            "storage_dir": "modernbert-large",
+            "max_tokens": 8192,
+            "dims": 768
+        },
         "st-minilm-l6-v1": {
             "model_id": "sentence-transformers/all-MiniLM-L6-v1",
             "cache_dir": "sentence-transformers_all-MiniLM-L6-v1_cache",

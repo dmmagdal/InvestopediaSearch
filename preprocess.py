@@ -53,13 +53,18 @@ def process_page(page: Tag | NavigableString) -> str:
 
 	# Locate the title and text tags (expect to have 1 of each per 
 	# article/page).
-	print(page.text)
-	exit()
-	title_tag = page.find("title")
-	text_tag = page.find("text")
+	text_tag = page.find("article")
+	alt_text_tag = page.find(
+		"header", 
+		id="mntl-external-basic-sublayout_1-0"
+	)
+
+	# NOTE:
+	# Anything not picked up by this process is considered "not a 
+	# proper article".
 
 	# Combine the title and text tag texts together.
-	article_text = title_tag.get_text() + "\n\n" + text_tag.get_text()
+	article_text = text_tag.get_text() if text_tag is not None else alt_text_tag.get_text()
 	
 	# Return the text.
 	return article_text
@@ -512,7 +517,7 @@ def merge_mappings(results: List[List]) -> Tuple[Dict, Dict]:
 	# through each result and update the aggregate variables.
 	for result in results:
 		# Unpack the result tuple.
-		doc_to_word, word_to_doc = result
+		doc_to_word, word_to_doc, _ = result
 
 		# Iteratively update the word to document dictionary.
 		for key, value in word_to_doc.items():
@@ -615,7 +620,11 @@ def process_articles(
 
 		# Isolate the article/page's raw text. Create copies for each
 		# preprocessing task.
-		article_text = process_page(page)
+		try:
+			article_text = process_page(page)
+		except:
+			print(f"Unable to parse invalid article: {file}")
+			continue
 
 		###############################################################
 		# BAG OF WORDS
@@ -630,7 +639,6 @@ def process_articles(
 			)
 
 			# Update word to document map.
-			file_hash = os.path.basename(file).rstrip(".html")
 			for word in xml_bow:
 				if word in list(word_to_doc.keys()):
 					# word_to_doc[word].append(file)
@@ -643,7 +651,7 @@ def process_articles(
 
 			# Update the document to words map.
 			# doc_to_word[file] = xml_word_freq
-			doc_to_word[file_hash] = xml_word_freq
+			doc_to_word[file] = xml_word_freq
 
 		###############################################################
 		# VECTOR EMBEDDINGS
@@ -679,9 +687,10 @@ def process_articles(
 			# token sequences for each chunk as well as the chunk 
 			# metadata (such as the respective index in the original
 			# text for each chunk and the length of the chunk).
-			chunk_metadata = vector_preprocessing(
-				article_text_v_db, config, tokenizer
-			)
+			# chunk_metadata = vector_preprocessing(
+			# 	article_text_v_db, config, tokenizer
+			# )
+			chunk_metadata = None
 
 			# Disable gradients.
 			with torch.no_grad():
@@ -850,13 +859,19 @@ def main() -> None:
 		[
 			os.path.join(
 				submodule_data_dir, 
-				expanded_article_map[article]["path"][6:]
+				expanded_article_map[article]["path"]
 			)
 			for article in expanded_article_map
 		]
 	)
-	print(data_files[0])
-	exit(0)
+	data_files = [
+		data_file.replace("./data/", "") 
+		for data_file in data_files
+	] # Clean up path (extra "./data/" in the path string)
+	data_files = [
+		data_file for data_file in data_files
+		if os.path.exists(data_file)
+	] # Only include paths that exist
 	if len(data_files) == 0:
 		print(f"InvestopediaDownload submodule has not extracted any articles from the downloader.")
 		print(f"Follow the README.md in the InvestopediaDownload submodule for instructions on how to download and extract articles from wikipedia.")
@@ -1003,7 +1018,7 @@ def main() -> None:
 			args, device, data_files, num_proc=max_proc
 		)
 	else:
-		doc_to_word, word_to_doc = process_articles(
+		doc_to_word, word_to_doc, _ = process_articles(
 			args, device, data_files
 		)
 
