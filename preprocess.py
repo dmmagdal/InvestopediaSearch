@@ -826,15 +826,24 @@ def main() -> None:
 		exit(1)
 		
 	# Check for necessary graph files to be initialized.
-	graph_file = os.path.join(
-		submodule_graph_dir,
-		f"term_article_graph_depth{args.max_depth}.json"
-	)
-	expanded_article_map_file = os.path.join(
-		submodule_graph_dir,
-		f"expanded_article_map_depth{args.max_depth}.json"
-	)
-	if not os.path.exists(graph_file):
+	assert args.max_depth > 0, \
+		f"Invalid --max_depth value was passed in (must be > 0, recieved {args.max_depth})"
+	if args.max_depth > 1:
+		graph_file = os.path.join(
+			submodule_graph_dir,
+			f"term_article_graph_depth{args.max_depth}.json"
+		)
+		expanded_article_map_file = os.path.join(
+			submodule_graph_dir,
+			f"expanded_article_map_depth{args.max_depth}.json"
+		)
+	else:
+		graph_file = None
+		expanded_article_map_file = os.path.join(
+			submodule_graph_dir,
+			f"article_map.json"
+		)
+	if graph_file is not None and not os.path.exists(graph_file):
 		print(f"InvestopediaDownload submodule has not extracted any articles from the downloader.")
 		print(f"This is signified by the missing {graph_file} for graph of depth {args.max_depth}.")
 		print(f"Follow the README.md in the InvestopediaDownload submodule for instructions on how to download and extract articles from wikipedia.")
