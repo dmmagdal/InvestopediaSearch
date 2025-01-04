@@ -7,10 +7,11 @@
         "tf_idf_cache": "./metadata/bag_of_words/tf_idf_cache",
         "idf_cache": "./metadata/bag_of_words/idf_cache",
         "trie_cache": "./metadata/bag_of_words/trie_cache",
-        "redirect_cache": "./metadata/bag_of_words/redirect_cache",
         "category_cache": "./metadata/bag_of_words/category_cache",
         "corpus_size": 21118935,
-        "avg_doc_len": 568.731806220342
+        "avg_doc_len": 568.731806220342,
+        "k1": 1.2,
+        "b": 0.75
     },
     "tf-idf_config": {
         "bow_dir": "./metadata/bag_of_words/",
@@ -19,7 +20,6 @@
         "tf_idf_cache": "./metadata/bag_of_words/tf_idf_cache",
         "idf_cache": "./metadata/bag_of_words/idf_cache",
         "trie_cache": "./metadata/bag_of_words/trie_cache",
-        "redirect_cache": "./metadata/bag_of_words/redirect_cache",
         "category_cache": "./metadata/bag_of_words/category_cache",
         "corpus_size": 21118935
     },
@@ -34,9 +34,13 @@
         "tf_idf_cache_path": "./metadata/bag_of_words/tf_idf_cache",
         "idf_cache_path": "./metadata/bag_of_words/idf_cache",
         "trie_cache_path": "./metadata/bag_of_words/trie_cache",
-        "redirect_cache_path": "./metadata/bag_of_words/redirect_cache",
         "category_cache_path": "./metadata/bag_of_words/category_cache",
-        "vector_metadata_path": "./metadata/vector"
+        "vector_metadata_path": "./metadata/vector",
+        "staging_idf_path": "./metadata/bag_of_words/staging/idf_cache",
+        "staging_corpus_path": "./metadata/bag_of_words/staging/corpus_cache",
+        "staging_redirect_path": "./metadata/bag_of_words/staging/redirect_cache",
+        "sparse_vector_path": "./metadata/bag_of_words/sparse_vectors",
+        "trie_path": "./metadata/bag_of_words/tries"
     },
     "models": {
         "bert": {
