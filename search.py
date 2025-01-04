@@ -1,7 +1,7 @@
 # search.py
 # Implement search methods on the dowloaded (preprocessed) wikipedia
 # data.
-# Python 3.9
+# Python 3.11
 # Windows/MacOS/Linux
 
 
@@ -23,7 +23,6 @@ from typing import List, Dict, Tuple
 
 from bs4 import BeautifulSoup
 from bs4.element import Tag, NavigableString
-# import faiss
 import lancedb
 import msgpack
 import numpy as np
@@ -439,7 +438,6 @@ class BagOfWords:
 		self.doc_to_word_folder = None
 		self.word_to_doc_files = None
 		self.doc_to_word_files = None
-		self.idf_files = None
 		self.int_to_doc_file = None
 		self.documents_folder = "./InvestopediaDownload/data"
 		self.corpus_size = corpus_size	# total number of documents (articles)
@@ -459,7 +457,7 @@ class BagOfWords:
 		initialized_variables = [
 			self.word_to_doc_folder, self.doc_to_word_folder,
 			self.word_to_doc_files, self.doc_to_word_files,
-			self.idf_files, self.int_to_doc_file,
+			self.int_to_doc_file,
 		]
 		assert None not in initialized_variables,\
 			"Some variables were not initialized properly"
@@ -497,7 +495,6 @@ class BagOfWords:
 
 		# Initialize path to word to idf and trie folders (trie folder
 		# contains document id to document mapping as well).
-		self.idf_folder = os.path.join(bow_dir, "idf_cache", f"depth_{depth}")
 		self.trie_folder = os.path.join(bow_dir, "trie_cache", f"depth_{depth}")
 
 		# Verify that the paths exist.
@@ -524,19 +521,9 @@ class BagOfWords:
 			"doc_to_int" + self.extension,
 			"int_to_doc" + self.extension,
 		]
-		self.idf_files = [
-			os.path.join(self.idf_folder, file)
-			for file in os.listdir(self.idf_folder)
-			if file.endswith(self.extension)
-		]
 		self.int_to_doc_file = os.path.join(
 			self.trie_folder, doc_id_map_files[1]
 		)
-		self.redirect_files = [
-			os.path.join(self.redirect_folder, file)
-			for file in os.listdir(self.redirect_folder)
-			if file.endswith(self.extension)
-		]
 		
 		# Verify that the list of files for each mapping folder is not
 		# empty.
@@ -544,12 +531,8 @@ class BagOfWords:
 			f"Detected word to documents folder {self.word_to_doc_folder} does have not supported files"
 		assert len(self.word_to_doc_files) != 0,\
 			f"Detected document to words folder {self.doc_to_word_folder} does have not supported files"
-		assert len(self.idf_files) != 0,\
-			f"Detected word to idf folder {self.idf_folder} does have not supported files"
 		assert os.path.exists(self.int_to_doc_file),\
 			f"Required document id to document file in {self.trie_folder} does exist"
-		assert len(self.redirect_files) != 0,\
-			f"Detected redirected documents folder {self.redirect_folder} does have not supported files"
 
 
 	def get_number_of_documents(self) -> int:

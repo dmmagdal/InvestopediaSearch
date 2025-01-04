@@ -7,6 +7,7 @@
 
 # Data
 /metadata
+/vector_data
 
 # Models
 /bert-base-uncased
