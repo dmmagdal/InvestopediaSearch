@@ -560,6 +560,17 @@ def main():
 				f,
 				indent=4
 			)
+		
+		# Update config too.
+		with open("config.json", "r") as f_read:
+			data = json.load(f_read)
+		
+		data["tf-idf_config"]["corpus_size"] = corpus_size
+		data["bm25_config"]["corpus_size"] = corpus_size
+		data["bm25_config"]["avg_doc_len"] = avg_doc_len
+
+		with open("config.json", "w+") as f_write:
+			json.dump(data, f_write, indent=4)
 	
 	print("All corpus level statistics have been calculated.")
 	print(f"Results stored to {corpus_path}") 
@@ -632,13 +643,6 @@ def main():
 		# Skipif the output parquet exists.
 		if os.path.exists(output_file):
 			continue
-
-		# NOTE:
-		# 16 processors was going to OOM on the first file. Would 
-		# highly recommend using just 1 processor/thread here. It's
-		# going to take a long time it's depending all upon the 
-		# resources available. 4 processors/threads is advised for a 
-		# 64GB system.
 
 		# Initialize a pandas DataFrame object to hold the flattened 
 		# data output.
@@ -768,78 +772,6 @@ def main():
 	#	compute time required for loading.
 	# - Straight inverted index is easier to implement and 
 	#	conceptualize.
-	# 1 index per file
-	# - linear but bound by number of files (O(195 files)).
-	# 1 index per starting char.
-	# - linear but bound by number of characters (O(27) characters).
-	# - smaller bounding but more data per index.
-	# Chunk every X number of words
-	# - doesn't handle the size of the vocab (42M words) unless X is
-	#	greater than 500K.
-
-	# 1 index total (ETA 4 hours). OOMed after 1.25 hours (49/195 
-	# files).
-	# index = dict()
-	# for idx, parquet_file in enumerate(tqdm(parquet_files)):
-	# 	base_name = os.path.basename(parquet_file)
-	# 	print(f"Build inverted index from {base_name} ({idx + 1}/{len(parquet_files)})")
-
-	# 	# Load dataframe and isolate all unique words in the dataframe.
-	# 	df = pd.read_parquet(parquet_file)
-	# 	words = [
-	# 		word for word in df["word"].unique().tolist() 
-	# 		if len(word) < max_word_len
-	# 	]
-	# 	new_words = set(words).difference(set(index.keys()))
-	# 	index.update({word: list() for word in new_words})
-
-	# 	# Filter the dataframe for relevant words in the current chunk
-	# 	filtered_df = df[df["word"].isin(words)]
-
-	# 	# Map documents to their integer representation and group by 'word'
-	# 	filtered_df["doc"] = filtered_df["doc"].map(doc_to_int)
-	# 	grouped = filtered_df.groupby("word")["doc"].apply(set)
-
-	# 	# Update word_doc_map with the new documents
-	# 	for word, doc_set in grouped.items():
-	# 		index[word].extend(doc_set - set(index[word]))
-			
-	# path = os.path.join(trie_folder, f"inverted_index{extension}")
-	# write_data_file(path, index, use_json)
-	# exit()
-
-	# 1 index per file (ETA 3.5 hours).
-	# for idx, parquet_file in enumerate(tqdm(parquet_files)):
-	# 	base_name = os.path.basename(parquet_file)
-	# 	print(f"Building tries for {base_name} ({idx + 1}/{len(parquet_files)})")
-
-	# 	# Load dataframe and isolate all unique words in the dataframe.
-	# 	df = pd.read_parquet(parquet_file)
-	# 	words = [
-	# 		word for word in df["word"].unique().tolist()
-	# 		if len(word) < max_word_len
-	# 	]
-
-	# 	# Initialize the file.
-	# 	file_name = base_name.replace(".parquet", extension)
-	# 	file = os.path.join(trie_folder, file_name)
-
-	# 	# Index.
-	# 	word_doc_map = {word: list() for word in words}
-
-	# 	# Filter the dataframe for relevant words in the current chunk
-	# 	filtered_df = df[df["word"].isin(words)]
-
-	# 	# Map documents to their integer representation and group by 'word'
-	# 	filtered_df["doc"] = filtered_df["doc"].map(doc_to_int)
-	# 	grouped = filtered_df.groupby("word")["doc"].apply(set)
-
-	# 	# Update word_doc_map with the new documents
-	# 	for word, doc_set in grouped.items():
-	# 		word_doc_map[word].extend(doc_set - set(word_doc_map[word]))
-		
-	# 	# Save index to file.
-	# 	write_data_file(file, word_doc_map, use_json)
 
 	# Index sorted by most common words and chunked (ETA 84 hours).
 	# Load the vocab and the document frequencies.
@@ -857,26 +789,6 @@ def main():
 		key=lambda x: x[1],
 		reverse=True
 	) # For chunk by number of documents
-
-	# Chunk the vocab.
-	# chunk_size = 1_000_000	# OOM (43 files)
-	# chunk_size = 500_000	# OOM (85 files)
-	# chunk_size = 300_000	# OOM
-	# chunk_size = 250_000	# OOM
-	# chunk_size = 100_000	# OOM (430 files)
-	# chunk_size = 50_000	# OOM (850 files)
-	# chunk_size = 10_000	# OOM (4300 files)
-	# chunk_size = 5_000	# OOM
-	# chunk_size = 1_000	# OOM
-	# chunk_size = 500	# OOM at (175/195 files or 90% on first chunk)
-
-	# vocab_chunks = [
-	# 	sorted_vocab[i:i + chunk_size]
-	# 	for i in range(0, len(sorted_vocab), chunk_size)
-	# ]
-
-	# for idx, word in enumerate(vocab_chunks[0][:20]):
-	# 	print(f"{word}: {vocab[word]} documents")
 	
 	# Graph highest number vocab values.
 	# import matplotlib.pyplot as plt
@@ -908,15 +820,14 @@ def main():
 	# number of documents each word is mapped to.
 	
 	# Adjust maximum number of aggregated documents according to memory
-	# constraints.
-	# max_aggr_doc_count = 1_000_000	# Should try this
-	max_aggr_doc_count = 500_000	# Running with this - consumes ~31 GB RAM on server
+	# constraints. Number of files generated will fluctuated depending
+	# on this value as well as the max_depth used.
+	# max_aggr_doc_count = 1_000_000	# consumes ~ GB RAM
+	max_aggr_doc_count = 500_000	# consumes ~ GB RAM
 	# max_aggr_doc_count = 250_000
 	# max_aggr_doc_count = 100_000
-	# max_aggr_doc_count = 50_000
-	# max_aggr_doc_count = 25_000
 
-	# Chunk the sorted list based on max_aggr_doc_count
+	# Chunk the sorted list based on max_aggr_doc_count.
 	vocab_chunks = []
 	current_chunk = []
 	current_sum = 0
@@ -949,8 +860,8 @@ def main():
 			trie_folder, f"inverted_index_{idx + 1}{extension}"
 		)
 
-		# if os.path.exists(file):
-		# 	continue
+		if os.path.exists(file):
+			continue
 
 		word_doc_map = {word: list() for word in chunk}
 
@@ -1109,13 +1020,6 @@ def main():
 	print("All Inverted Index Tries have been computed.")
 	print(f"Results stored to {trie_folder}") 
 	gc.collect()
-
-	# NOTE:
-	# Staging uses around 900 MB of storage.
-	# DataFrame with precomputed sparse vector values uses 54 GB of 
-	# storage. This could be reduced significantly (ie only storing the
-	# document, word, tf_idf, and bm25) but I don't want to deal with 
-	# that right now.
 
 	# Clear staging (if applicable).
 	if clear_staging in ["after", "both"]:
