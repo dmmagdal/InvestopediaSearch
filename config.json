@@ -8,8 +8,8 @@
         "idf_cache": "./metadata/bag_of_words/idf_cache",
         "trie_cache": "./metadata/bag_of_words/trie_cache",
         "category_cache": "./metadata/bag_of_words/category_cache",
-        "corpus_size": 21118935,
-        "avg_doc_len": 568.731806220342,
+        "corpus_size": 6243,
+        "avg_doc_len": 896.7727054300817,
         "k1": 1.2,
         "b": 0.75
     },
@@ -21,7 +21,7 @@
         "idf_cache": "./metadata/bag_of_words/idf_cache",
         "trie_cache": "./metadata/bag_of_words/trie_cache",
         "category_cache": "./metadata/bag_of_words/category_cache",
-        "corpus_size": 21118935
+        "corpus_size": 6243
     },
     "vector-search_config": {
         "model": "bert",
