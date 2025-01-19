@@ -19,7 +19,7 @@ from nltk.tokenize import word_tokenize
 import torch
 
 from preprocess import process_page
-from search import ReRankSearch, TF_IDF, BM25, VectorSearch
+from search import TF_IDF, BM25#, VectorSearch, ReRankSearch
 from search import print_results
 
 
@@ -71,7 +71,11 @@ def test(args: Namespace) -> None:
 	# INITIALIZE SEARCH ENGINES
 	###################################################################
 	search_1_init_start = time.perf_counter()
-	tf_idf = TF_IDF(bow_dir, corpus_size=tfidf_corpus_size)
+	tf_idf = TF_IDF(
+		bow_dir,
+		depth=args.max_depth, 
+		corpus_size=tfidf_corpus_size
+	)
 	search_1_init_end = time.perf_counter()
 	search_1_init_elapsed = search_1_init_end - search_1_init_start
 	print(f"Time to initialize TF-IDF search: {search_1_init_elapsed:.6f} seconds")
@@ -79,6 +83,7 @@ def test(args: Namespace) -> None:
 	search_2_init_start = time.perf_counter()
 	bm25 = BM25(
 		bow_dir, 
+		depth=args.max_depth,
 		corpus_size=bm25_corpus_size, 
 		avg_doc_len=bm25_avg_doc_len
 	)
@@ -123,12 +128,13 @@ def test(args: Namespace) -> None:
 		data = json.load(f)
 		sampled_files = random.sample(list(data.keys()), 5)	# sample size of 5 files.
 	
+	# Process sample files paths.
 	sampled_files = [
-		os.path.join("./InvestopediaDownload", file)
+		os.path.join("./InvestopediaDownload", data[file]["path"])
 		for file in sampled_files
 	] # Build path.
 	sampled_files = [
-		file.replace("./data/", "") for file in sampled_files
+		file.replace("./data/", "data/") for file in sampled_files
 	] # Remove extra "./data/" from path.
 	sampled_files = [
 		file for file in sampled_files if os.path.exists(file)
@@ -143,12 +149,13 @@ def test(args: Namespace) -> None:
 		try:
 			file_text = process_page(soup)
 		except:
+			print(f"Unable to process text from file {file}. Skipping file.")
 			continue
 
 		text_tokens = word_tokenize(file_text)
-		cieling = math.ceil(len(text_tokens) * 0.75)	# 75% of text
+		ceiling = math.ceil(len(text_tokens) * 0.75)	# 75% of text
 		text_length = 25								# number of tokens
-		start_index = random.randint(0, cieling)
+		start_index = random.randint(0, ceiling)
 		text_passage = " ".join(
 			text_tokens[start_index: start_index + text_length]
 		)												# actual passage compiled
@@ -156,9 +163,10 @@ def test(args: Namespace) -> None:
 	
 	# Given passages that are directly pulled from random articles, 
 	# determine if the passage each search engine retrieves is correct.
-	query_passages = [
-		passage for _, passage in file_passages
-	]
+	# query_passages = [
+	# 	passage for _, passage in file_passages
+	# ]
+	query_passages = file_passages
 	print("=" * 72)
 
 	# Iterate through each search engine.
@@ -174,7 +182,7 @@ def test(args: Namespace) -> None:
 
 		# Iterate through each passage and run the search with the 
 		# search engine.
-		for query in query_passages:
+		for file, query in query_passages:
 			# Run the search and track the time it takes to run the 
 			# search.
 			query_search_start = time.perf_counter()
@@ -185,15 +193,32 @@ def test(args: Namespace) -> None:
 			# Print out the search time and the search results.
 			print(f"Search returned in {query_search_elapsed:.6f} seconds")
 			print()
-			print_results(results, search_type=name)
+			# print_results(results, search_type=name)
+
+			# Get top-k accuracy.
+			found_index = -1
+			for idx, result in enumerate(results):
+				if file == result[1]:
+					found_index = idx + 1
+			
+			if found_index < 0:
+				print(f"Target article was not found in search (top-50)")
+			else:
+				print(f"Target article was found in search (top-50) in position: {found_index}")
+			
+			for k in [5, 10, 25, 50]:
+				print(f"top-{k}: {found_index <= k and found_index > -1}")
 
 			# Append the search time to a list.
 			search_times.append(query_search_elapsed)
 
 		# Compute and print the average search time.
+		assert len(search_times) != 0, \
+			"Expected there to be sufficient queries to the search engines. Recieved 0."
 		avg_search_time = sum(search_times) / len(search_times)
 		print(f"Average search time: {avg_search_time:.6f} seconds")
 		print("=" * 72)
+		exit()
 
 	###################################################################
 	# GENERAL QUERY
