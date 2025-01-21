@@ -515,12 +515,11 @@ class BagOfWords:
 		# Iterate through each file in the documents to words map 
 		# files.
 		print("Getting the number of documents in the corpus...")
-		for file in tqdm(self.inverted_index_files):
+		for file in tqdm(self.sparse_vector_files):
 			# Load the data from the file and increment the counter by
 			# the number of documents in each file.
 			df = pd.read_parquet(file)
-			documents = df["doc"].unique().tolist()
-			counter += len(documents)
+			counter += df["doc"].nunique()
 		
 		# Return the count.
 		return counter
@@ -682,7 +681,7 @@ class TF_IDF(BagOfWords):
 		# Preprocess the search query to a bag of words.
 		words, word_freq = bow_preprocessing(query, True)
 
-		# Isolate a list of files/documents to look through.
+		# Sort the words (as part of vectorization).
 		words = sorted(words)
 
 		# Query inverted index.
@@ -851,7 +850,6 @@ class TF_IDF(BagOfWords):
 			# profiler.disable()
 			# profiler.print_stats(sort="time")
 
-		print(f"thread stack heap length: {len(stack_heap)}")
 		return stack_heap
 	
 
@@ -1005,7 +1003,7 @@ class TF_IDF(BagOfWords):
 		return corpus_tfidf_heap
 
 
-class BM25(BagOfWords):#
+class BM25(BagOfWords):
 	def __init__(self, bow_dir: str, depth: int = 1, k1: float = 1.0, b: float = 0.0, 
 			  	corpus_size: int=-1, avg_doc_len: float=-1.0, srt: 
 				float=-1.0, use_json=False) -> None:
@@ -1033,16 +1031,15 @@ class BM25(BagOfWords):#
 		# Iterate through each file in the documents to words map 
 		# files.
 		print("Computing average document length of corpus...")
-		for file in tqdm(self.doc_to_word_files):
+		for file in tqdm(self.sparse_vector_files):
 			# Load the data from the file.
-			doc_to_words = load_data_file(file, self.use_json)
+			df = pd.read_parquet(file)
 
-			# For each document in the data, compute the length of the
-			# document by adding up all the word frequency values.
-			for doc in list(doc_to_words.keys()):
-				doc_size_sum += sum(
-					[value for value in doc_to_words[doc].values()]
-				)
+			# Size of a document is equal to the sum of all term
+			# frequencies for all words in the document. The sum of all
+			# document sizes is the sum of that value (document size) 
+			# for all documents in the corpus.
+			doc_size_sum += df["term_freq"].sum()
 
 		# Return the average document size.
 		return doc_size_sum / self.corpus_size
@@ -1067,37 +1064,82 @@ class BM25(BagOfWords):#
 		words = bow_preprocessing(query, False)
 		words = words[0] # unpack return tuple.
 
-		# Isolate a list of files/documents to look through.
-		# target_documents = self.get_documents_from_trie(words)
-		# target_documents = self.inverted_index(words, index="word_idf_filter")
-		target_documents = self.inverted_index(words, index="word_idf_filter")
+		# NOTE:
+		# No need to sort words as part of vectorization because BM25
+		# works on taking a score sum rather than relying on vectors.
+
+		# Query inverted index.
+		document_ids = self.inverted_index.query(words)
+
+		num_workers = 8
+		num_workers = min(num_workers, len(self.sparse_vector_files))
+		chunk_size = math.ceil(
+			len(self.sparse_vector_files) / num_workers
+		)
+		file_chunks = [
+			self.sparse_vector_files[i:i + chunk_size]
+			for i in range(0, len(self.sparse_vector_files), chunk_size)
+		]
+		args_list = [
+			(document_ids, file_chunk, words, max_results)
+			for file_chunk in file_chunks
+		]
+		corpus_bm25 = []
+
+		# Use with Pandas/all other software.
+		with concurrent.futures.ThreadPoolExecutor(max_workers=num_workers) as executor:
+			print("Starting multithreaded processing")
+			results = executor.map(
+				lambda args: self.targeted_file_search(*args), 
+				args_list
+			)
+			
+			for result in results:
+				while len(result) > 0:
+					result_item = result.pop()
+					if result_item in corpus_bm25:
+						continue
+					if max_results != -1 and len(corpus_bm25) >= max_results:
+						# Pushpop the highest (cosine similarity) value
+						# tuple from the heap to make way for the next
+						# tuple.
+						heapq.heappushpop(
+							corpus_bm25,
+							result_item
+						)
+					else:
+						heapq.heappush(
+							corpus_bm25,
+							result_item
+						)
 
 		# Compute the BM25 for the corpus.
-		corpus_bm25 = self.compute_bm25(
-			words, target_documents, max_results=max_results
-		)
+		# corpus_bm25 = self.compute_bm25(
+		# 	words, documents_ids, max_results=max_results
+		# )
 
-		# The corpus TF-IDF results are stored in a max heap. Convert
-		# the structure back to a list sorted from largest to smallest 
-		# BM25 score.
+		# The corpus BM25 results are stored in a max heap. Convert the
+		# structure back to a list sorted from largest to smallest BM25
+		# score.
 		sorted_rankings = []
 		for _ in range(len(corpus_bm25)):
-			# Pop the bottom item from the max heap.
+			# Pop the top item from the max heap.
 			result = heapq.heappop(corpus_bm25)
 
-			# Extract the document path and SHA1 and use them to load 
-			# the article text.
-			document_sha1 = result[1]
-			document, sha1 = os.path.basename(document_sha1).split(".xml")
-			document = os.path.join(self.documents_folder, document + ".xml")
-			text = load_article_text(document, [sha1])[0]
+			# Reverse the cosine similarity score back to its original
+			# value.
+			result[0] *= -1
+
+			# Extract the document path load the article text.
+			document_path = result[1]
+			text = load_article_text(document_path)
 			
 			# Append the results.
 			full_result = result + [text, [0, len(text)]]
 
-			# Insert the item into the list from the end (append).
-			sorted_rankings.append(full_result)
-		
+			# Insert the item into the list from the back.
+			sorted_rankings.insert(-1, full_result)
+
 		# Return the list.
 		return sorted_rankings
 
@@ -1220,6 +1262,59 @@ class BM25(BagOfWords):#
 
 		# Return the corpus BM25 rankings.
 		return corpus_bm25_heap
+	
+
+	def targeted_file_search(self, document_ids: List[str], sparse_vector_files: List[str], words: List[str], max_results: int):
+		# Stack heap for the search.
+		stack_heap = list()
+		heapq.heapify(stack_heap)
+
+		for file in tqdm(sparse_vector_files):
+			# Read in the doc_to_words data into a dataframe.
+			file = file.replace(".msgpack", ".parquet")
+			df_doc2words = pd.read_parquet(file)
+			target_docs = document_ids
+
+			# Convert doc and word entries to str (they're currently 
+			# stored as object dtypes).
+			df_doc2words["doc"] = df_doc2words["doc"].apply(str)
+			df_doc2words["word"] = df_doc2words["word"].apply(str)
+
+			# Isolate entries where the document IDs are within the set
+			# of target documents and the words for those documents and
+			# within the set of target words.
+			df_doc2words = df_doc2words[
+				df_doc2words["word"].isin(words) & df_doc2words["doc"].isin(target_docs)
+			]
+
+			# Group bm25 values by document to get a document level 
+			# bm25 value.
+			doc_vectors = df_doc2words.groupby("doc")["bm25"].sum()
+			
+			# Compute the document cosine similarity.
+			results = doc_vectors.reset_index(name="bm25_sum")
+
+			# Grab the top n results and store it to a heap.
+			top_n = results.nlargest(max_results, "bm25_sum")
+			top_n_list = []
+			for _, row in top_n.iterrows():
+				top_n_list.append((-row["bm25_sum"], row["doc"]))
+
+			for doc_bm25_score, doc in top_n_list:
+				# Insert the document name (includes file path), and 
+				# BM25 (document sum) value to the heapq. The heapq 
+				# sorts by the first value in the tuple so that is why 
+				# the BM25 score is the first item in the tuple.
+				if max_results != -1 and len(stack_heap) >= max_results:
+					# Pushpop the highest (BM25) value tuple from the 
+					# heap to make way for the next tuple.
+					heapq.heappushpop(stack_heap, [doc_bm25_score, doc])
+				else:
+					# Push the highest (BM25) value tuple from the heap 
+					# to make way for the next tuple.
+					heapq.heappush(stack_heap, [doc_bm25_score, doc])
+
+		return stack_heap
 
 
 class VectorSearch:

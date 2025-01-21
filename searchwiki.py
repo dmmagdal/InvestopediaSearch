@@ -36,7 +36,6 @@ def test(args: Namespace) -> None:
 	bow_dir = "./metadata/bag_of_words"
 	index_dir = "./test-temp"
 
-
 	assert args.max_depth > 0, \
 		f"Invalid --max_depth value was passed in (must be > 0, recieved {args.max_depth})"
 	
@@ -60,7 +59,6 @@ def test(args: Namespace) -> None:
 		bm25_corpus_size = config["bm25_config"]["corpus_size"]
 		bm25_avg_doc_len = config["bm25_config"]["avg_doc_len"]
 	
-	model = "bert"
 	device = "cpu"
 	if torch.cuda.is_available():
 		device = "cuda"
@@ -105,7 +103,7 @@ def test(args: Namespace) -> None:
 
 	search_engines = [
 		("tf-idf", tf_idf), 
-		# ("bm25", bm25), 
+		("bm25", bm25), 
 		# ("vector", vector_search),
 		# ("rerank", rerank)
 	]
@@ -119,7 +117,7 @@ def test(args: Namespace) -> None:
 	path = "./InvestopediaDownload/graph/"
 	if args.max_depth > 1:
 		file_path = os.path.join(
-			path, f"term_article_graph_depth{args.max_depth}.json"
+			path, f"expanded_article_map_depth{args.max_depth}.json"
 		)
 	else:
 		file_path = os.path.join(path, "article_map.json")
@@ -163,14 +161,12 @@ def test(args: Namespace) -> None:
 	
 	# Given passages that are directly pulled from random articles, 
 	# determine if the passage each search engine retrieves is correct.
-	# query_passages = [
-	# 	passage for _, passage in file_passages
-	# ]
 	query_passages = file_passages
 	print("=" * 72)
 
-	# Iterate through each search engine.
-	for name, engine in search_engines:
+	# Iterate through each search engine (sparse vector search engines 
+	# like BM25 or TF-IDF).
+	for name, engine in search_engines[:2]:
 		# Skip vector search because it is not designed/optimized for 
 		# scaling (even more so at inference time).
 		if name == "vector":
@@ -193,7 +189,7 @@ def test(args: Namespace) -> None:
 			# Print out the search time and the search results.
 			print(f"Search returned in {query_search_elapsed:.6f} seconds")
 			print()
-			# print_results(results, search_type=name)
+			print_results(results, search_type=name)
 
 			# Get top-k accuracy.
 			found_index = -1
@@ -218,7 +214,6 @@ def test(args: Namespace) -> None:
 		avg_search_time = sum(search_times) / len(search_times)
 		print(f"Average search time: {avg_search_time:.6f} seconds")
 		print("=" * 72)
-		exit()
 
 	###################################################################
 	# GENERAL QUERY
