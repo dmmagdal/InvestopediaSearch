@@ -12,15 +12,97 @@ import json
 import math
 import os
 import random
+import shutil
 import time
 
 from bs4 import BeautifulSoup
 from nltk.tokenize import word_tokenize
 import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
 
 from preprocess import process_page
 from search import TF_IDF, BM25#, VectorSearch, ReRankSearch
 from search import print_results
+
+
+def build_query(text: str, device: str = "cpu") -> str:
+	'''
+	Build a query with a given text snippet using a small LLM (such as 
+		llama 3.2 1B).
+	@param: text (str), the text that is going to be analyzed and 
+		answered with the output query.
+	@param: device (str), which hardware acceleration to use (if any)
+		for the small LLM. Default is "cpu".
+	@return: returns a query string that is answered by the input text.
+	'''
+	# Model config.
+	model_id = "meta-llama/Llama-3.2-1B-Instruct"
+	model_cache = "./llama/cache/" + model_id.replace("/", "_")
+	model_path = "./llama/models/" + model_id.replace("/", "_")
+	os.makedirs(model_cache, exist_ok=True)
+	os.makedirs(model_path, exist_ok=True)
+
+	if len(os.listdir(model_path)) == 0:
+		# Load huggingface token (required for downloading llama 3.2 1b 
+		# instruct model).
+		env_file = ".env"
+		if not os.path.exists(env_file):
+			print(f"Unable to locate '.env' file. File is required to download the model from huggingface.")
+			exit(1)
+
+		with open(env_file, "r") as f:
+			token = f.readline().replace("\n", "")
+
+		# Initialize tokenizer and model. Download both to the cache
+		# directory and save to the model directory.
+		tokenizer = AutoTokenizer.from_pretrained(
+			model_id, cache_dir=model_cache, use_auth_token=token
+		)
+		model = AutoModelForCausalLM.from_pretrained(
+			model_id, cache_dir=model_cache, use_auth_token=token
+		)
+		tokenizer.save_pretrained(model_path)
+		model.save_pretrained(model_path)
+
+		# Clear the cache path.
+		shutil.rmtree(model_cache)
+
+	# Initialize pipeline.
+	pipe = pipeline(
+		"text-generation",
+		model=AutoModelForCausalLM.from_pretrained(model_path),
+		tokenizer=AutoTokenizer.from_pretrained(model_path),
+		device=device
+	)
+
+	# Initialize instruction messages.
+	messages = [
+		{
+			"role": "system", 
+			"content": "You are a helpful chatbot that follows instructions exactly and concisely."
+		},
+		{
+			"role": "user", 
+			"content": f"""
+				Given the following text, write a question that can be answered with the following input text. Output the response in the following format:
+				
+				- Question: [question]
+				- Answer: [answer from the text]
+				
+				Input Text:
+				{text[0] if isinstance(text, list) else text}
+			"""
+		},
+	]
+
+	# Pass instruction into the pipeline.
+	outputs = pipe(messages, max_new_tokens=1024)
+
+	# Isolate the response for the user. Clean up the output and return 
+	# the query.
+	query = outputs[0]["generated_text"][-1]
+	query = query["content"].split("\n")[0].replace("- Question:", "")
+	return query
 
 
 def test(args: Namespace) -> None:
@@ -113,7 +195,7 @@ def test(args: Namespace) -> None:
 	###################################################################
 	# Sample passages from data in the dataset for exact passage 
 	# matching and recall.
-	random.seed(1234)
+	random.seed(4321)
 	path = "./InvestopediaDownload/graph/"
 	if args.max_depth > 1:
 		file_path = os.path.join(
@@ -133,7 +215,7 @@ def test(args: Namespace) -> None:
 	] # Build path.
 	sampled_files = [
 		file.replace("./data/", "data/") for file in sampled_files
-	] # Remove extra "./data/" from path.
+	] # Replace "./data/" from path with just "data/".
 	sampled_files = [
 		file for file in sampled_files if os.path.exists(file)
 	] # Remove files that do not exist.
@@ -221,9 +303,35 @@ def test(args: Namespace) -> None:
 	# Given passages that have some relative connection to random 
 	# articles, determine if the passage each search engine retrieves 
 	# is correct.
-	query_text = [
+	file_passages = list()
+	for file in sampled_files:
+		with open(file, "r") as f:
+			soup = BeautifulSoup(f.read(), "lxml")
+		
+		try:
+			file_text = process_page(soup)
+		except:
+			print(f"Unable to process text from file {file}. Skipping file.")
+			continue
 
-	]
+		# Split text and remove "empty" strings.
+		split_text = file_text.split("\n\n")
+		while "\n" in split_text or "" in split_text:
+			if "\n" in split_text:
+				split_text.remove("\n")
+			
+			if "" in split_text:
+				split_text.remove("")
+
+		# Sample from the text splits using the text lengths as the 
+		# sampling weights.
+		text = random.choices(
+			split_text,
+			weights=[len(text) for text in split_text]	
+		)
+
+		# file_passages.append((file, build_query(text, device)))
+		file_passages.append((file, build_query(text)))
 	
 	for name, engine in search_engines:
 		pass
@@ -237,7 +345,6 @@ def search_loop() -> None:
 	@param: takes no arguments.
 	@return: returns nothing.
 	'''
-
 	# Read in the title text (ascii art).
 	with open("title.txt", "r") as f:
 		title = f.read()
