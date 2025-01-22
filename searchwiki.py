@@ -19,8 +19,9 @@ from bs4 import BeautifulSoup
 from nltk.tokenize import word_tokenize
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
+from transformers import BatchEncoding
 
-from preprocess import process_page
+from preprocess import load_model, process_page, vector_preprocessing
 from search import TF_IDF, BM25#, VectorSearch, ReRankSearch
 from search import print_results
 
@@ -313,6 +314,20 @@ def test(args: Namespace) -> None:
 		except:
 			print(f"Unable to process text from file {file}. Skipping file.")
 			continue
+
+		tokenizer, model = load_model(config)
+		# model = model.to(device)
+		all_tokens = vector_preprocessing(file_text, config, tokenizer)
+		token_keys = ["input_ids", "attention_mask", "chunk_type_ids"]
+		for tokens in all_tokens:
+			token_details = {
+				key: value for key, value in tokens.items()
+				if key in token_keys
+			}
+			# model(**tokens)
+			# model(**BatchEncoding(token_details).to(device))
+			model(**BatchEncoding(token_details))
+		exit()
 
 		# Split text and remove "empty" strings.
 		split_text = file_text.split("\n\n")
