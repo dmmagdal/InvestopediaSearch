@@ -97,45 +97,56 @@ def vector_preprocessing(article_text: str, config: Dict, tokenizer: AutoTokeniz
 
 		all_tokens_chunks = dict()
 		for key, tensor in tokens.items():
-			# Pad each tensor to be divisible by the chunking process.
-			# pad_size = max_pad_length - tensor_length
-			# if len(tensor.shape) > 2:
-			# 	# tokens[key] = F.pad(tensor, (0, 0, 0, pad_size))
-			# 	padded_tensor = F.pad(tensor, (0, 0, 0, pad_size))
-			# else:
-			# 	# tokens[key] = F.pad(tensor, (0, pad_size))
-			# 	padded_tensor = F.pad(tensor, (0, pad_size))
-
-			# Chunk each tensor given the context length and token 
-			# overlap.
-			# start_indices = torch.arange(0, tensor_length, step_size)
-			start_indices = list(range(0, tensor_length, step_size))
-			tensor_chunks = list()
-			for start_idx in start_indices:
-				end_idx = min(
-					start_idx + context_length, tensor_length
-				)
-				# chunk = padded_tensor.narrow(
-				# 	1, start_idx, end_idx - start_idx
-				# )
-				chunk = tensor.narrow(
-					1, start_idx, end_idx - start_idx
-				)
-
-				pad_size = context_length - chunk.size(1)
+			if tensor_length < context_length:
+				# Pad each tensor to be divisible by the chunking 
+				# process.
+				pad_size = max_pad_length - tensor_length
 				if len(tensor.shape) > 2:
-					chunk = F.pad(chunk, (0, 0, 0, pad_size))
+					# tokens[key] = F.pad(tensor, (0, 0, 0, pad_size))
+					chunk = F.pad(tensor, (0, 0, 0, pad_size))
 				else:
-					chunk = F.pad(chunk, (0, pad_size))
-
+					# tokens[key] = F.pad(tensor, (0, pad_size))
+					chunk = F.pad(tensor, (0, pad_size))
+				
 				# Assert that the chunk length matches the context 
 				# length. It should given that we already padded the
 				# tensors first.
 				assert chunk.size(1) == context_length, \
 					f"Mismatched chunked tensor length. Expected {context_length}, received {chunk.size(1)}"
-					
+				
 				# Append chunk to the list of tensor chunks.
-				tensor_chunks.append(chunk)
+				tensor_chunks = [chunk]
+			else:
+				# Chunk each tensor given the context length and token 
+				# overlap.
+				# start_indices = torch.arange(0, tensor_length, step_size)
+				start_indices = list(range(0, tensor_length, step_size))
+				tensor_chunks = list()
+				for start_idx in start_indices:
+					end_idx = min(
+						start_idx + context_length, tensor_length
+					)
+					# chunk = padded_tensor.narrow(
+					# 	1, start_idx, end_idx - start_idx
+					# )
+					chunk = tensor.narrow(
+						1, start_idx, end_idx - start_idx
+					)
+
+					pad_size = context_length - chunk.size(1)
+					if len(tensor.shape) > 2:
+						chunk = F.pad(chunk, (0, 0, 0, pad_size))
+					else:
+						chunk = F.pad(chunk, (0, pad_size))
+
+					# Assert that the chunk length matches the context 
+					# length. It should given that we already padded the
+					# tensors first.
+					assert chunk.size(1) == context_length, \
+						f"Mismatched chunked tensor length. Expected {context_length}, received {chunk.size(1)}"
+					
+					# Append chunk to the list of tensor chunks.
+					tensor_chunks.append(chunk)
 
 			# Store chunks to dictionary.
 			all_tokens_chunks[key] = tensor_chunks
@@ -156,9 +167,13 @@ def vector_preprocessing(article_text: str, config: Dict, tokenizer: AutoTokeniz
 		assert all(len(values) == len(next(iter(all_tokens_chunks.values()))) for values in all_tokens_chunks.values()),\
 			"Expected the number of chunks for tokenized data to be uniform across all keys."
 
-		token_chunks_list = [
-
-		]
+		token_chunks_list = list()
+		keys = list(tokens.keys())
+		for idx in range(len(values)):
+			token_chunks_list.append({
+				key: all_tokens_chunks[key][idx] for key in keys
+			})
+		return token_chunks_list
 		exit()
 
 		###############################################################
