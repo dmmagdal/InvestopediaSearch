@@ -319,14 +319,15 @@ def test(args: Namespace) -> None:
 		# model = model.to(device)
 		all_tokens = vector_preprocessing(file_text, config, tokenizer)
 		token_keys = ["input_ids", "attention_mask", "chunk_type_ids"]
-		for tokens in all_tokens:
+		for token_metadata in all_tokens:
 			token_details = {
-				key: value for key, value in tokens.items()
+				key: value for key, value in token_metadata.items()
 				if key in token_keys
 			}
+			model(**token_details)
 			# model(**tokens)
 			# model(**BatchEncoding(token_details).to(device))
-			model(**BatchEncoding(token_details))
+			# model(**BatchEncoding(token_details))
 		exit()
 
 		# Split text and remove "empty" strings.

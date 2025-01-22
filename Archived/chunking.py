@@ -66,7 +66,6 @@ def vector_preprocessing(article_text: str, config: Dict, tokenizer: AutoTokeniz
 
 	split_text = [" ".join(split_text)]
 
-	all_tokens = list()
 	for text_chunk in split_text:
 		tokens = tokenizer(
 			text_chunk, 
@@ -174,77 +173,6 @@ def vector_preprocessing(article_text: str, config: Dict, tokenizer: AutoTokeniz
 				key: all_tokens_chunks[key][idx] for key in keys
 			})
 		return token_chunks_list
-		exit()
-
-		###############################################################
-		# TEST 1:
-		###############################################################
-		# # Tokenize.
-		# tokens = tokenizer(
-		# 	text_chunk, 
-		# 	# return_attention_mask=True,
-		# 	return_offsets_mapping=True,
-		# 	return_tensors="pt",
-		# 	# padding="max_length",
-		# )
-		# print(tokens)
-		# # all_tokens.append(tokens)
-
-		# input_ids = tokens["input_ids"]
-		# token_type_ids = tokens["token_type_ids"]
-		# attention_mask = tokens["attention_mask"]
-		# offset_mapping = tokens["offset_mapping"]
-		# pad_token_id = 0
-
-		# start_idx = 0
-
-		# while start_idx < len(input_ids):
-		# 	end_idx = min(start_idx + context_length, len(input_ids))
-			
-		# 	# Extract data from the current chunk
-		# 	chunk_input_ids = input_ids[start_idx:end_idx]
-		# 	chunk_type_ids = token_type_ids[start_idx:end_idx]
-		# 	chunk_attention_mask = attention_mask[start_idx:end_idx]
-		# 	chunk_offset_mappings = offset_mapping[start_idx:end_idx]
-			
-		# 	# Determine the start and end character indices in the 
-		# 	# original text.
-		# 	mapping = chunk_offset_mappings.squeeze(0)
-		# 	mini_start_idx = 0
-		# 	while mini_start_idx < mapping.size(0) and torch.equal(mapping[mini_start_idx], torch.tensor([0, 0])):
-		# 		mini_start_idx += 1
-
-		# 	mini_end_idx = mapping.size(0)
-		# 	while mini_start_idx < mini_start_idx and torch.equal(mapping[mini_end_idx], torch.tensor([0, 0])):
-		# 		mini_start_idx -= 1
-
-		# 	chunk_start = mapping[0][0]
-		# 	chunk_end = mapping[-1][-1]
-		# 	# chunk_start = chunk_offset_mappings[0][0]
-		# 	# chunk_end = chunk_offset_mappings[-1][-1]
-
-		# 	# Pad the last chunk if necessary
-		# 	if len(chunk_input_ids) < context_length:
-		# 		# chunk_input_ids += [pad_token_id] * (context_length - len(chunk_input_ids))
-		# 		pad_tensor = torch.tensor([pad_token_id] * (context_length - len(chunk_input_ids)))
-		# 		pad_tensor = pad_tensor.unsqueeze(0)
-		# 		chunk_input_ids = torch.cat((chunk_input_ids, pad_tensor), dim=1)
-			
-		# 	all_tokens.append(
-		# 		{	
-		# 			"input_ids": chunk_input_ids, 
-		# 			"attention_mask": chunk_attention_mask,
-		# 			"chunk_type_ids": chunk_type_ids,
-		# 			"text_range": (chunk_start, chunk_end)
-		# 		}
-		# 	)
-
-		# 	# MOve the start index forward, considering the overlap.
-		# 	start_idx = end_idx - overlap  # Move forward, keeping the overlap
-
-		# all_tokens.append(tokens)
-		
-	return all_tokens
 
 
 def main():

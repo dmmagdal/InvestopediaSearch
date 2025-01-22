@@ -29,6 +29,7 @@ from nltk.tokenize import word_tokenize
 from num2words import num2words
 import requests
 import torch
+import torch.nn.functional as F
 from tqdm import tqdm
 from transformers import AutoTokenizer, AutoModel
 
@@ -517,6 +518,9 @@ def vector_preprocessing(article_text: str, config: Dict, tokenizer: AutoTokeniz
 		to the input text), and length of the text split for each split
 		in the text.
 	'''
+	assert isinstance(article_text, str),\
+		f"Required argument 'article_text' expected a str, recieved {type(article_text)}."
+
 	# Pull the model's context length and overlap token count from the
 	# configuration file.
 	model_name = config["vector-search_config"]["model"]
@@ -536,72 +540,105 @@ def vector_preprocessing(article_text: str, config: Dict, tokenizer: AutoTokeniz
 		if "" in split_text:
 			split_text.remove("")
 
-	all_tokens = list()
+	# Iterate throuch each text chunk.
+	token_chunks_list = list()
 	for text_chunk in split_text:
-		# Tokenize.
+		# Tokenize the text.
 		tokens = tokenizer(
 			text_chunk, 
-			return_attention_mask=True,
-			return_offsets_mapping=True,
-			# return_tensors="pt",
-			# padding="max_length",
+			return_offsets_mapping=True,	# required to get the text offsets.
+			return_tensors="pt"				# required in order to pass through to model.
 		)
-		print(tokens)
-		# all_tokens.append(tokens)
 
-		input_ids = tokens["input_ids"]
-		token_type_ids = tokens["token_type_ids"]
-		attention_mask = tokens["attention_mask"]
-		offset_mapping = tokens["offset_mapping"]
-		pad_token_id = 0
+		# Verify the batch dim of the tensors is 1 (passing in only 1 
+		# input string to the tokenizer should result in all tensors 
+		# having a batch size of 1).
+		assert all([value.size(0) == 1 for value in tokens.values()]),\
+			"Expected all tensors in tokenized output to have batch size of 1."
+		assert all(tensor.size(1) == next(iter(tokens.values())).size(1) for tensor in tokens.values()),\
+			"Expected all length dimensions in tokenized output tensors to be uniform."
 
-		start_idx = 0
+		# Given the tensor length, the context length, and token 
+		# overlap, compute the maximum length needed to pad the tensors
+		# in order for the chunking to work evenly.
+		tensor_length = list(tokens.values())[0].size(1)
+		step_size = context_length - overlap
+		chunks_needed = (tensor_length + step_size - 1) // step_size
+		max_pad_length = (chunks_needed * step_size) + overlap
 
-		while start_idx < len(input_ids):
-			end_idx = min(start_idx + context_length, len(input_ids))
-			
-			# Extract data from the current chunk
-			chunk_input_ids = input_ids[start_idx:end_idx]
-			chunk_type_ids = token_type_ids[start_idx:end_idx]
-			chunk_attention_mask = attention_mask[start_idx:end_idx]
-			chunk_offset_mappings = offset_mapping[start_idx:end_idx]
-			
-			# Determine the start and end character indices in the 
-			# original text.
-			chunk_start = chunk_offset_mappings[0][0]
-			chunk_end = chunk_offset_mappings[-1][-1]
+		# Iterate through each tensor in the tokens dictionary and 
+		# process them into chunks of the correct size.
+		all_tokens_chunks = dict()
+		for key, tensor in tokens.items():
+			if tensor_length < context_length:
+				# Pad each tensor to be divisible by the chunking 
+				# process.
+				pad_size = max_pad_length - tensor_length
+				if len(tensor.shape) > 2:
+					# tokens[key] = F.pad(tensor, (0, 0, 0, pad_size))
+					chunk = F.pad(tensor, (0, 0, 0, pad_size))
+				else:
+					# tokens[key] = F.pad(tensor, (0, pad_size))
+					chunk = F.pad(tensor, (0, pad_size))
+				
+				# Assert that the chunk length matches the context 
+				# length. It should given that we already padded the
+				# tensors first.
+				assert chunk.size(1) == context_length, \
+					f"Mismatched chunked tensor length. Expected {context_length}, received {chunk.size(1)}"
+				
+				# Append chunk to the list of tensor chunks.
+				tensor_chunks = [chunk]
+			else:
+				# Chunk each tensor given the context length and token 
+				# overlap.
+				start_indices = list(range(0, tensor_length, step_size))
+				tensor_chunks = list()
+				for start_idx in start_indices:
+					end_idx = min(
+						start_idx + context_length, tensor_length
+					)
+					chunk = tensor.narrow(
+						1, start_idx, end_idx - start_idx
+					)
 
-			# Pad the last chunk if necessary
-			if len(chunk_input_ids) < context_length:
-				chunk_input_ids += [pad_token_id] * (context_length - len(chunk_input_ids))
-			
-			all_tokens.append(
-				{	
-					"input_ids": chunk_input_ids, 
-					"attention_mask": chunk_attention_mask,
-					"chunk_type_ids": chunk_type_ids,
-					"text_range": (chunk_start, chunk_end)
-				}
-			)
+					# Pad the tensor chunk if necessary.
+					pad_size = context_length - chunk.size(1)
+					if len(tensor.shape) > 2:
+						chunk = F.pad(chunk, (0, 0, 0, pad_size))
+					else:
+						chunk = F.pad(chunk, (0, pad_size))
 
-			# MOve the start index forward, considering the overlap.
-			start_idx = end_idx - overlap  # Move forward, keeping the overlap
+					# Assert that the chunk length matches the context 
+					# length. It should given that we already padded the
+					# tensors first.
+					assert chunk.size(1) == context_length, \
+						f"Mismatched chunked tensor length. Expected {context_length}, received {chunk.size(1)}"
+					
+					# Append the chunk to the list of tensor chunks.
+					tensor_chunks.append(chunk)
 
-		# all_tokens.append(tokens)
-		
-	return all_tokens
+			# Store chunks to dictionary.
+			all_tokens_chunks[key] = tensor_chunks
 
+		# Verify all chunks in the dictionary have the same lengths.
+		assert all(len(values) == len(next(iter(all_tokens_chunks.values()))) for values in all_tokens_chunks.values()),\
+			"Expected the number of chunks for tokenized data to be uniform across all keys."
 
-	# metadata = []
+		# Get the keys from the tokenized dictionary.
+		keys = list(tokens.keys())
+		values = all_tokens_chunks["input_ids"]
 
-	# # Add to the metadata list by passing the text to the high level
-	# # recursive splitter function.
-	# metadata += high_level_split(
-	# 	article_text, 0, tokenizer, context_length, splitters
-	# )
-	
-	# # Return the text metadata.
-	# return metadata
+		# Iterate through all chunks and tensors in the dictionary to 
+		# construct the respective tokenized dictionaries for each 
+		# chunk.
+		for idx in range(len(values)):
+			token_chunks_list.append({
+				key: all_tokens_chunks[key][idx] for key in keys
+			})
+
+	# Return the list of tokenized dictionaries.
+	return token_chunks_list
 
 
 def merge_mappings(results: List[List]) -> Tuple[Dict, Dict]:
