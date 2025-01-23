@@ -315,17 +315,6 @@ def test(args: Namespace) -> None:
 			print(f"Unable to process text from file {file}. Skipping file.")
 			continue
 
-		tokenizer, model = load_model(config)
-		# model = model.to(device)
-		all_tokens = vector_preprocessing(file_text, config, tokenizer)
-		token_keys = ["input_ids", "attention_mask", "chunk_type_ids"]
-		for token_metadata in all_tokens:
-			token_details = {
-				key: value for key, value in token_metadata.items()
-				if key in token_keys
-			}
-			model(**token_details)
-
 		# Split text and remove "empty" strings.
 		split_text = file_text.split("\n\n")
 		while "\n" in split_text or "" in split_text:

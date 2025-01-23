@@ -1194,7 +1194,11 @@ def main() -> None:
 		###############################################################
 		# VECTOR EMBEDDINGS
 		###############################################################
-		# if args.vector:
+		# NOTE:
+		# This process is serialized due to how unpredictable lancedb 
+		# is when it comes to multihreaded or multiprocessing 
+		# connections.
+
 		# Load the tokenizer and model.
 		tokenizer, model = load_model(config, device)
 
@@ -1204,13 +1208,10 @@ def main() -> None:
 
 		# Assert the table for the file exists (should have been
 		# initialized in the for loop in main()).
-		# table_name = os.path.basename(file).rstrip(".html")
 		current_tables = db.table_names()
 		table_name = f"investopedia_depth{args.max_depth}"
 		if table_name not in current_tables:
 			db.create_table(table_name, schema=schema)
-		# assert table_name in current_tables,\
-		# 	f"Expected table {table_name} to be in list of current tables before vector embedding preprocessing.\nCurrent Tables: {', '.join(current_tables)}"
 
 		# Get the table for the file.
 		table = db.open_table(table_name)
@@ -1233,6 +1234,13 @@ def main() -> None:
 		token_keys = [
 			"input_ids", "attention_mask", "token_type_ids"
 		]
+
+		# TODO:
+		# Figure out a way to parallelize the embedding proces without
+		# using multithreading/processing (use batching). Current flow
+		# is already quite complex but additional optimization is 
+		# warranted given the runtimes of doing serial, batch size = 1
+		# embedding.
 
 		# Disable gradients.
 		with torch.no_grad():
@@ -1282,14 +1290,7 @@ def main() -> None:
 				# data is passed to the appropriate (hardware)
 				# device.
 				output = model(
-					# **tokenizer(
-					# 	text_chunk,
-					# 	add_special_tokens=False,
-					# 	padding="max_length",
-					# 	return_tensors="pt"
-					# ).to(device)
-					# **model_inputs
-					**BatchEncoding(
+					**BatchEncoding(		# Object returned by tokenizer __call__() (see huggingface documentation).
 						data=model_inputs,
 						tensor_type="pt"
 					).to(device)
