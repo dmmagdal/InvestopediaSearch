@@ -325,10 +325,6 @@ def test(args: Namespace) -> None:
 				if key in token_keys
 			}
 			model(**token_details)
-			# model(**tokens)
-			# model(**BatchEncoding(token_details).to(device))
-			# model(**BatchEncoding(token_details))
-		exit()
 
 		# Split text and remove "empty" strings.
 		split_text = file_text.split("\n\n")
