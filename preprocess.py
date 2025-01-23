@@ -745,15 +745,6 @@ def process_articles(
 	word_to_doc = dict()
 	vector_metadata = list()
 
-	# Load the configurations from the config JSON.
-	with open("config.json", "r") as f:
-		config = json.load(f)
-
-	# Load the model tokenizer and model (if applicable). Do this here
-	# instead of within the for loop for (runtime) efficiency.
-	tokenizer, model = None, None
-	db, table = None, None
-
 	for file in tqdm(data_files):
 		# Load the file and pass it to beautifulsoup.
 		with open(file, "r") as f:
@@ -788,104 +779,6 @@ def process_articles(
 
 			# Update the document to words map.
 			doc_to_word[file] = xml_word_freq
-
-		###############################################################
-		# VECTOR EMBEDDINGS
-		###############################################################
-		# if args.vector:
-		# 	# Load the tokenizer and model.
-		# 	tokenizer, model = load_model(config, device)
-
-		# 	# Connect to the vector database
-		# 	uri = config["vector-search_config"]["db_uri"]
-		# 	db = lancedb.connect(uri)
-
-		# 	# Assert the table for the file exists (should have been
-		# 	# initialized in the for loop in main()).
-		# 	table_name = os.path.basename(file).rstrip(".html")
-		# 	current_tables = db.table_names()
-		# 	assert table_name in current_tables,\
-		# 		f"Expected table {table_name} to be in list of current tables before vector embedding preprocessing.\nCurrent Tables: {', '.join(current_tables)}"
-
-		# 	# Get the table for the file.
-		# 	table = db.open_table(table_name)
-
-		# 	# Assertion to make sure tokenizer and model and vector
-		# 	# database and current table are initialized.
-		# 	assert None not in [tokenizer, model], "Model tokenizer and model is expected to be initialized for vector embeddings preprocessing."
-		# 	assert None not in [db, table], "Vector database and current table are expected to be initialized for vector embeddings preprocessing."
-
-		# 	# Create a copy of the raw text.
-		# 	article_text_v_db = copy.deepcopy(article_text)
-
-		# 	# Pass the article to break the text into manageable chunks
-		# 	# for the embedding model. This will yield the (padded) 
-		# 	# token sequences for each chunk as well as the chunk 
-		# 	# metadata (such as the respective index in the original
-		# 	# text for each chunk and the length of the chunk).
-		# 	# chunk_metadata = vector_preprocessing(
-		# 	# 	article_text_v_db, config, tokenizer
-		# 	# )
-		# 	chunk_metadata = None
-
-		# 	# Disable gradients.
-		# 	with torch.no_grad():
-		# 		# Embed each chunk and update the metadata.
-		# 		for idx, chunk in enumerate(chunk_metadata):
-		# 			# Update/add the metadata for the source filename
-		# 			# and article SHA1.
-		# 			chunk.update({"file": file})
-
-		# 			# Get original text chunk from text.
-		# 			text_idx = chunk["text_idx"]
-		# 			text_len = chunk["text_len"]
-		# 			text_chunk = article_text_v_db[text_idx: text_idx + text_len]
-
-		# 			# Pass original text chunk to tokenizer. Ensure the
-		# 			# data is passed to the appropriate (hardware)
-		# 			# device.
-		# 			output = model(
-		# 				**tokenizer(
-		# 					text_chunk,
-		# 					add_special_tokens=False,
-		# 					padding="max_length",
-		# 					return_tensors="pt"
-		# 				).to(device)
-		# 			)
-
-		# 			# Compute the embedding by taking the mean of the
-		# 			# last hidden state tensor across the seq_len axis.
-		# 			embedding = output[0].mean(dim=1)
-
-		# 			# Apply the following transformations to allow the
-		# 			# embedding to be compatible with being stored in 
-		# 			# the vector DB (lancedb):
-		# 			#	1) Send the embedding to CPU (if it's not 
-		# 			#		already there)
-		# 			#	2) Convert the embedding to numpy and flatten 
-		# 			# 		the embedding to a 1D array
-		# 			embedding = embedding.to("cpu")
-		# 			embedding = embedding.numpy()[0]
-
-		# 			# NOTE:
-		# 			# Originally I had embeddings stored into the 
-		# 			# metadata dictionary under the "embedding", key
-		# 			# but lancedb requires the embedding data be under 
-		# 			# the "vector" name.
-
-		# 			# Update the chunk dictionary with the embedding
-		# 			# and set the value of that chunk in the metadata
-		# 			# list to the (updated) chunk.
-		# 			# chunk.update({"embedding": embedding})
-		# 			chunk.update({"vector": embedding})
-		# 			chunk_metadata[idx] = chunk
-				
-		# 	# Add the chunk metadata to the vector metadata.
-		# 	# vector_metadata += chunk_metadata
-
-		# 	# Add chunk metadata to the vector database. Should be on
-		# 	# "append" mode by default.
-		# 	table.add(chunk_metadata, mode="append")
 	
 	# Return the mappings and metadata.
 	return doc_to_word, word_to_doc, vector_metadata
