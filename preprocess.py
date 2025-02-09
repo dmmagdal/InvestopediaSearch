@@ -573,7 +573,8 @@ def vector_preprocessing(article_text: str, config: Dict, tokenizer: AutoTokeniz
 			if tensor_length < context_length:
 				# Pad each tensor to be divisible by the chunking 
 				# process.
-				pad_size = max_pad_length - tensor_length
+				# pad_size = max_pad_length - tensor_length
+				pad_size = context_length - tensor_length
 				if len(tensor.shape) > 2:
 					# tokens[key] = F.pad(tensor, (0, 0, 0, pad_size))
 					chunk = F.pad(tensor, (0, 0, 0, pad_size))
@@ -782,6 +783,155 @@ def process_articles(
 	
 	# Return the mappings and metadata.
 	return doc_to_word, word_to_doc, vector_metadata
+
+
+def file_vector_embeddings(
+	data_files: List[str], 
+	tokenizer: AutoTokenizer, 
+	model: AutoModel, 
+	config: Dict, 
+	device: str
+) -> List[Dict]:
+	embedding_metadata = list()
+
+	for file in tqdm(data_files):
+		# Load the file and pass it to beautifulsoup.
+		with open(file, "r") as f:
+			page = BeautifulSoup(f.read(), "lxml")
+
+		# Isolate the article/page's raw text. Create copies for each
+		# preprocessing task.
+		try:
+			article_text = process_page(page)
+		except:
+			print(f"Unable to parse invalid article: {file}")
+			continue
+
+		###############################################################
+		# VECTOR EMBEDDINGS
+		###############################################################
+		# NOTE:
+		# This process is serialized due to how unpredictable lancedb 
+		# is when it comes to multihreaded or multiprocessing 
+		# connections.
+
+		# Pass the article to break the text into manageable chunks
+		# for the embedding model. This will yield the (padded) 
+		# token sequences for each chunk as well as the chunk 
+		# metadata (such as the respective index in the original
+		# text for each chunk and the length of the chunk).
+		chunk_metadata = vector_preprocessing(
+			article_text, config, tokenizer
+		)
+
+		# Isolate keys that are required to build the model inputs.
+		token_keys = [
+			"input_ids", "attention_mask", "token_type_ids"
+		]
+
+		# Disable gradients.
+		with torch.no_grad():
+			# Embed each chunk and update the metadata.
+			for idx, chunk in enumerate(chunk_metadata):
+				# Update/add the metadata for the source filename.
+				chunk.update({"file": file})
+				model_inputs = {
+					key: value for key, value in chunk.items()
+					if key in token_keys
+				}
+
+				# Get text offsets. Start by trimming leading and 
+				# trailing [0, 0] from the offset_mappings.
+				offsets = chunk["offset_mapping"]
+				nonzero_indices = (offsets != 0)\
+					.any(dim=2)\
+					.nonzero(as_tuple=True)[1]
+
+				# NOTE:
+				# After doing some investigating, it does seem like it
+				# is possible for there to be no actual "text" (so a
+				# zero tensor for the offsets) while not having zero
+				# tensors for the model inputs (for BERT, I found one 
+				# example that was just the [CLS] and [SEP] tokens). 
+				# Given the fact no text is being aligned (on account 
+				# of the zero tensor for offsets), it's best to just 
+				# skip this data and not even let it get passed to the 
+				# model for embedding.
+
+				# Handle the case where the tensors are zero tensors.
+				if nonzero_indices.numel() == 0:
+					continue
+
+				# Trim the [0, 0] entries.
+				start, end = nonzero_indices.min().item(), nonzero_indices.max().item() + 1
+				result = offsets[:, start:end]
+
+				# Isolate the starting and ending text offset mappings
+				# from the trimmed tensor.
+				chunk["start_end_indices"] = (
+					result[0, 0, 0].item(),
+					result[0, -1, -1].item()
+				)
+
+				# Pass original text chunk to tokenizer. Ensure the
+				# data is passed to the appropriate (hardware)
+				# device.
+				output = model(
+					**BatchEncoding(		# Object returned by tokenizer __call__() (see huggingface documentation).
+						data=model_inputs,
+						tensor_type="pt"
+					).to(device)
+				)
+
+				# Compute the embedding by taking the mean of the
+				# last hidden state tensor across the seq_len axis.
+				embedding = output[0].mean(dim=1)
+
+				# Apply the following transformations to allow the
+				# embedding to be compatible with being stored in 
+				# the vector DB (lancedb):
+				#	1) Send the embedding to CPU (if it's not 
+				#		already there)
+				#	2) Convert the embedding to numpy and flatten 
+				# 		the embedding to a 1D array
+				embedding = embedding.to("cpu")
+				embedding = embedding.numpy()[0]
+
+				# NOTE:
+				# Originally I had embeddings stored into the 
+				# metadata dictionary under the "embedding", key
+				# but lancedb requires the embedding data be under 
+				# the "vector" name.
+
+				# Update the chunk dictionary with the embedding.
+				# chunk.update({"embedding": embedding})
+				chunk.update({"vector": embedding})
+
+				# Delete model input keys and the offset mapping from 
+				# the chunk. They've already been isolated and passed 
+				# into the model for embedding as well as processed to 
+				# give the start and end index from the text. Should
+				# only have "file" (str), "start_end_indices" 
+				# (Tuple[int]), and "vector" (numpy.ndarray of shape
+				# (dims,)).
+				for key in token_keys + ["offset_mapping"]:
+					chunk.pop(key, None)
+
+				# Set the value of that chunk in the metadata
+				# list to the (updated) chunk.
+				chunk_metadata[idx] = chunk
+
+			# Add the updated chunk metadata to the return list.
+			embedding_metadata += chunk_metadata
+
+	return embedding_metadata
+
+
+def merge_embedding_metadata(results): 
+	data = list()
+	for result in results:
+		data += result
+	return data
 
 
 def main() -> None:
@@ -1016,6 +1166,11 @@ def main() -> None:
 	word_to_doc = dict()
 	doc_to_word = dict()
 
+	# Unpack arguments for multiprocessing.
+	num_proc = args.num_proc
+	override_gpu2cpu = args.override_gpu2cpu_limit
+	gpu2cpu_limit = args.gpu2cpu_limit
+
 	# NOTE:
 	# Be careful if you are on mac. Because Apple Silicon works off of
 	# the unified memory model, there may be some performance hit for 
@@ -1024,15 +1179,11 @@ def main() -> None:
 
 	# GPU setup.
 	device = "cpu"
-	if torch.cuda.is_available():
-		device = "cuda"
-	elif torch.backends.mps.is_available():
-		device = "mps"
-
-	# Unpack arguments for multiprocessing.
-	num_proc = args.num_proc
-	override_gpu2cpu = args.override_gpu2cpu_limit
-	gpu2cpu_limit = args.gpu2cpu_limit
+	if num_proc <= gpu2cpu_limit or override_gpu2cpu:
+		if torch.cuda.is_available():
+			device = "cuda"
+		elif torch.backends.mps.is_available():
+			device = "mps"
 
 	if num_proc > 1:
 		# Determine the number of CPU cores to use (this will be
@@ -1071,165 +1222,53 @@ def main() -> None:
 	tokenizer, model = None, None
 	db, table = None, None
 
-	for file in tqdm(data_files):
-		# Load the file and pass it to beautifulsoup.
-		with open(file, "r") as f:
-			page = BeautifulSoup(f.read(), "lxml")
+	# Load the tokenizer and model.
+	tokenizer, model = load_model(config, device)
 
-		# Isolate the article/page's raw text. Create copies for each
-		# preprocessing task.
-		try:
-			article_text = process_page(page)
-		except:
-			print(f"Unable to parse invalid article: {file}")
-			continue
+	# Connect to the vector database
+	uri = config["vector-search_config"]["db_uri"]
+	db = lancedb.connect(uri)
 
-		###############################################################
-		# VECTOR EMBEDDINGS
-		###############################################################
-		# NOTE:
-		# This process is serialized due to how unpredictable lancedb 
-		# is when it comes to multihreaded or multiprocessing 
-		# connections.
+	# Assert the table for the file exists (should have been
+	# initialized in the for loop in main()).
+	current_tables = db.table_names()
+	table_name = f"investopedia_depth{args.max_depth}"
+	if table_name not in current_tables:
+		db.create_table(table_name, schema=schema)
 
-		# Load the tokenizer and model.
-		tokenizer, model = load_model(config, device)
+	# Get the table for the file.
+	table = db.open_table(table_name)
 
-		# Connect to the vector database
-		uri = config["vector-search_config"]["db_uri"]
-		db = lancedb.connect(uri)
+	# Assertion to make sure tokenizer and model and vector
+	# database and current table are initialized.
+	assert None not in [tokenizer, model], "Model tokenizer and model is expected to be initialized for vector embeddings preprocessing."
+	assert None not in [db, table], "Vector database and current table are expected to be initialized for vector embeddings preprocessing."
 
-		# Assert the table for the file exists (should have been
-		# initialized in the for loop in main()).
-		current_tables = db.table_names()
-		table_name = f"investopedia_depth{args.max_depth}"
-		if table_name not in current_tables:
-			db.create_table(table_name, schema=schema)
+	# Chunk data files.
+	max_files_per_chunk = 500
+	data_file_chunks = [
+		data_files[i:i + max_files_per_chunk]
+		for i in range(0, len(data_files), max_files_per_chunk)
+	]
 
-		# Get the table for the file.
-		table = db.open_table(table_name)
+	# Iterate through chunks based on number of processors.
+	for idx in range(0, len(data_file_chunks), num_proc):
+		file_chunks = data_file_chunks[idx:idx + num_proc]
 
-		# Assertion to make sure tokenizer and model and vector
-		# database and current table are initialized.
-		assert None not in [tokenizer, model], "Model tokenizer and model is expected to be initialized for vector embeddings preprocessing."
-		assert None not in [db, table], "Vector database and current table are expected to be initialized for vector embeddings preprocessing."
-
-		# Pass the article to break the text into manageable chunks
-		# for the embedding model. This will yield the (padded) 
-		# token sequences for each chunk as well as the chunk 
-		# metadata (such as the respective index in the original
-		# text for each chunk and the length of the chunk).
-		chunk_metadata = vector_preprocessing(
-			article_text, config, tokenizer
-		)
-
-		# Isolate keys that are required to build the model inputs.
-		token_keys = [
-			"input_ids", "attention_mask", "token_type_ids"
+		chunk_args = [
+			(files_chunk, tokenizer, model, config, device)
+			for files_chunk in file_chunks
 		]
 
-		# TODO:
-		# Figure out a way to parallelize the embedding proces without
-		# using multithreading/processing (use batching). Current flow
-		# is already quite complex but additional optimization is 
-		# warranted given the runtimes of doing serial, batch size = 1
-		# embedding.
+		with mp.Pool(processes=num_proc) as pool:
+			results = pool.starmap(file_vector_embeddings, chunk_args)
 
-		# Disable gradients.
-		with torch.no_grad():
-			# Embed each chunk and update the metadata.
-			for idx, chunk in enumerate(chunk_metadata):
-				# Update/add the metadata for the source filename.
-				chunk.update({"file": file})
-				model_inputs = {
-					key: value for key, value in chunk.items()
-					if key in token_keys
-				}
+			metadata = merge_embedding_metadata(results)
 
-				# Get text offsets. Start by trimming leading and 
-				# trailing [0, 0] from the offset_mappings.
-				offsets = chunk["offset_mapping"]
-				nonzero_indices = (offsets != 0)\
-					.any(dim=2)\
-					.nonzero(as_tuple=True)[1]
-
-				# NOTE:
-				# After doing some investigating, it does seem like it
-				# is possible for there to be no actual "text" (so a
-				# zero tensor for the offsets) while not having zero
-				# tensors for the model inputs (for BERT, I found one 
-				# example that was just the [CLS] and [SEP] tokens). 
-				# Given the fact no text is being aligned (on account 
-				# of the zero tensor for offsets), it's best to just 
-				# skip this data and not even let it get passed to the 
-				# model for embedding.
-
-				# Handle the case where the tensors are zero tensors.
-				if nonzero_indices.numel() == 0:
-					continue
-
-				# Trim the [0, 0] entries.
-				start, end = nonzero_indices.min().item(), nonzero_indices.max().item() + 1
-				result = offsets[:, start:end]
-
-				# Isolate the starting and ending text offset mappings
-				# from the trimmed tensor.
-				chunk["start_end_indices"] = (
-					result[0, 0, 0].item(),
-					result[0, -1, -1].item()
-				)
-
-				# Pass original text chunk to tokenizer. Ensure the
-				# data is passed to the appropriate (hardware)
-				# device.
-				output = model(
-					**BatchEncoding(		# Object returned by tokenizer __call__() (see huggingface documentation).
-						data=model_inputs,
-						tensor_type="pt"
-					).to(device)
-				)
-
-				# Compute the embedding by taking the mean of the
-				# last hidden state tensor across the seq_len axis.
-				embedding = output[0].mean(dim=1)
-
-				# Apply the following transformations to allow the
-				# embedding to be compatible with being stored in 
-				# the vector DB (lancedb):
-				#	1) Send the embedding to CPU (if it's not 
-				#		already there)
-				#	2) Convert the embedding to numpy and flatten 
-				# 		the embedding to a 1D array
-				embedding = embedding.to("cpu")
-				embedding = embedding.numpy()[0]
-
-				# NOTE:
-				# Originally I had embeddings stored into the 
-				# metadata dictionary under the "embedding", key
-				# but lancedb requires the embedding data be under 
-				# the "vector" name.
-
-				# Update the chunk dictionary with the embedding.
-				# chunk.update({"embedding": embedding})
-				chunk.update({"vector": embedding})
-
-				# Delete model input keys and the offset mapping from 
-				# the chunk. They've already been isolated and passed 
-				# into the model for embedding as well as processed to 
-				# give the start and end index from the text. Should
-				# only have "file" (str), "start_end_indices" 
-				# (Tuple[int]), and "vector" (numpy.ndarray of shape
-				# (dims,)).
-				for key in token_keys + ["offset_mapping"]:
-					chunk.pop(key, None)
-
-				# Set the value of that chunk in the metadata
-				# list to the (updated) chunk.
-				chunk_metadata[idx] = chunk
 
 		# Add chunk metadata to the vector database. Should be on
 		# "append" mode by default.
-		table.add(chunk_metadata, mode="append")
+		table.add(metadata, mode="append")
 
 	###############################################################
 	# SAVE MAPPINGS.
