@@ -17,6 +17,17 @@ Description: Build a search engine as part of a larger RAG project that looks at
      - document-based:
      - trie-based:
      - category tree-based:
+ - Ran `preprocess.py` on server with P100 card (16 GB VRAM).
+     - Command used: `python preprocessing --max_depth 2 --num_proc 16 --batch_size 8 --override_gpu2cpu_limit --max_files_per_chunk 500`
+         - Runs both bag of words and vector preprocessing.
+         - Overrides the default GPU auto toggle to CPU limit for number of processors (limit is 4).
+         - Sets the number of processors to 16.
+         - Sets the batch size to 8 for the embedding model.
+         - The `max_depth` is for the graph mapping all articles. Set to 2 above but results are similar for when set to 1.
+         - The `max_files_per_chunk` is for the maximum number of files to contain within a chunk when chunking the files for vector processing. Using the value of 500 gave us the below memory footprint but a lower should give a lower footprint.
+     - Memory: 27 GB RAM
+     - VARM: ~10 GB
+     - Time: ~3 hours 45 minutes
 
 
 ### TODO
