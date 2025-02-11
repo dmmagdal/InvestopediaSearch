@@ -885,10 +885,10 @@ def file_vector_embeddings(
 
 			# Isolate the starting and ending text offset mappings
 			# from the trimmed tensor.
-			chunk["start_end_indices"] = (
+			chunk["start_end_indices"] = [
 				result[0, 0, 0].item(),
 				result[0, -1, -1].item()
-			)
+			]
 
 			# Set the value of that chunk in the metadata
 			# list to the (updated) chunk.
@@ -1175,8 +1175,9 @@ def main() -> None:
 	# creating a new, empty table in the vector database).
 	schema = pa.schema([
 		pa.field("file", pa.utf8()),
-		pa.field("text_idx", pa.int32()),
-		pa.field("text_len", pa.int32()),
+		# pa.field("text_idx", pa.int32()),
+		# pa.field("text_len", pa.int32()),
+		pa.field("start_end_indices", pa.list_(pa.int32(), 2)),
 		pa.field("vector", pa.list_(pa.float32(), dims))
 	])
 
@@ -1264,37 +1265,53 @@ def main() -> None:
 		elif torch.backends.mps.is_available():
 			device = "mps"
 
-	if num_proc > 1:
-		# Determine the number of CPU cores to use (this will be
-		# passed down the the multiprocessing function)
-		max_proc = min(mp.cpu_count(), num_proc)
+	if args.bow:
+		if num_proc > 1:
+			# Determine the number of CPU cores to use (this will be
+			# passed down the the multiprocessing function)
+			max_proc = min(mp.cpu_count(), num_proc)
 
-		# Reset the device if the number of processes to be used is
-		# greater than 4. This is because the device setting is
-		# quite rudimentary with this system. I don't know
-		# 1) How much VRAM each instance of a model would take up 
-		#	vs the amount of VRAM available (4GB, 8GB, 12GB, ...).
-		# 2) How transformers or pytorch would have to be 
-		#	configured to balance the number of model instances on
-		#	each process against multiple GPUs on device.
-		# This is also still assuming that with multiprocessing
-		# enabled, the user has a sufficient regular memory/RAM to
-		# load everything there. For now, this just makes things
-		# simpler.
-		if max_proc > gpu2cpu_limit and not override_gpu2cpu:
-			device = "cpu"
+			# Reset the device if the number of processes to be used is
+			# greater than 4. This is because the device setting is
+			# quite rudimentary with this system. I don't know
+			# 1) How much VRAM each instance of a model would take up 
+			#	vs the amount of VRAM available (4GB, 8GB, 12GB, ...).
+			# 2) How transformers or pytorch would have to be 
+			#	configured to balance the number of model instances on
+			#	each process against multiple GPUs on device.
+			# This is also still assuming that with multiprocessing
+			# enabled, the user has a sufficient regular memory/RAM to
+			# load everything there. For now, this just makes things
+			# simpler.
+			if max_proc > gpu2cpu_limit and not override_gpu2cpu:
+				device = "cpu"
 
-		doc_to_word, word_to_doc = multiprocess_articles(
-			args, device, data_files, num_proc=max_proc
-		)
-	else:
-		doc_to_word, word_to_doc, _ = process_articles(
-			args, device, data_files
-		)
+			doc_to_word, word_to_doc = multiprocess_articles(
+				args, device, data_files, num_proc=max_proc
+			)
+		else:
+			doc_to_word, word_to_doc, _ = process_articles(
+				args, device, data_files
+			)
 
-	# Load the configurations from the config JSON.
-	with open("config.json", "r") as f:
-		config = json.load(f)
+		###############################################################
+		# SAVE MAPPINGS.
+		###############################################################
+
+		# Write metadata to the respective files.
+		if len(list(doc_to_word.keys())) > 0:
+			with open(doc2words_path_json, "w+") as d2w_f:
+				json.dump(doc_to_word, d2w_f, indent=4)
+			with open(doc2words_path_msgpack, "wb+") as d2w_f:
+				packed = msgpack.packb(doc_to_word)
+				d2w_f.write(packed)
+
+		if len(list(word_to_doc.keys())) > 0:
+			with open(word2docs_path_json, "w+") as w2d_f:
+				json.dump(word_to_doc, w2d_f, indent=4)
+			with open(word2docs_path_msgpack, "wb+") as w2d_f:
+				packed = msgpack.packb(word_to_doc)
+				w2d_f.write(packed)
 
 	# Load the model tokenizer and model (if applicable). Do this here
 	# instead of within the for loop for (runtime) efficiency.
@@ -1335,43 +1352,25 @@ def main() -> None:
 		for i in range(0, len(data_files), max_files_per_chunk)
 	]
 
-	# Iterate through chunks based on number of processors.
-	for idx in range(0, len(data_file_chunks), num_proc):
-		file_chunks = data_file_chunks[idx:idx + num_proc]
+	if args.vector:
+		# Iterate through chunks based on number of processors.
+		for idx in range(0, len(data_file_chunks), num_proc):
+			file_chunks = data_file_chunks[idx:idx + num_proc]
 
-		chunk_args = [
-			(files_chunk, tokenizer, model, config, device, batch_size)
-			for files_chunk in file_chunks
-		]
+			chunk_args = [
+				(files_chunk, tokenizer, model, config, device, batch_size)
+				for files_chunk in file_chunks
+			]
 
-		with mp.Pool(processes=num_proc) as pool:
-			results = pool.starmap(file_vector_embeddings, chunk_args)
+			with mp.Pool(processes=num_proc) as pool:
+				results = pool.starmap(file_vector_embeddings, chunk_args)
 
-			metadata = merge_embedding_metadata(results)
+				metadata = merge_embedding_metadata(results)
 
 
-		# Add chunk metadata to the vector database. Should be on
-		# "append" mode by default.
-		table.add(metadata, mode="append")
-
-	###############################################################
-	# SAVE MAPPINGS.
-	###############################################################
-
-	# Write metadata to the respective files.
-	if len(list(doc_to_word.keys())) > 0:
-		with open(doc2words_path_json, "w+") as d2w_f:
-			json.dump(doc_to_word, d2w_f, indent=4)
-		with open(doc2words_path_msgpack, "wb+") as d2w_f:
-			packed = msgpack.packb(doc_to_word)
-			d2w_f.write(packed)
-
-	if len(list(word_to_doc.keys())) > 0:
-		with open(word2docs_path_json, "w+") as w2d_f:
-			json.dump(word_to_doc, w2d_f, indent=4)
-		with open(word2docs_path_msgpack, "wb+") as w2d_f:
-			packed = msgpack.packb(word_to_doc)
-			w2d_f.write(packed)
+			# Add chunk metadata to the vector database. Should be on
+			# "append" mode by default.
+			table.add(metadata, mode="append")
 
 	# Perform garbage collection.
 	gc.collect()

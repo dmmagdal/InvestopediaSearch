@@ -18,7 +18,7 @@ Description: Build a search engine as part of a larger RAG project that looks at
      - trie-based:
      - category tree-based:
  - Ran `preprocess.py` on server with P100 card (16 GB VRAM).
-     - Command used: `python preprocessing --max_depth 2 --num_proc 16 --batch_size 8 --override_gpu2cpu_limit --max_files_per_chunk 500`
+     - Command used: `python preprocessing --bow --vector --max_depth 2 --num_proc 16 --batch_size 8 --override_gpu2cpu_limit --max_files_per_chunk 500`
          - Runs both bag of words and vector preprocessing.
          - Overrides the default GPU auto toggle to CPU limit for number of processors (limit is 4).
          - Sets the number of processors to 16.
@@ -28,6 +28,13 @@ Description: Build a search engine as part of a larger RAG project that looks at
      - Memory: 27 GB RAM
      - VARM: ~10 GB
      - Time: ~3 hours 45 minutes
+     - Corpus stats
+         - max_depth 1
+             - corpus_size: 6234
+             - avg_doc_len: 896.7727054300817
+         - max_depth 2
+             - corpus_size: 9829
+             - avg_doc_len: 1034.2395971105911
 
 
 ### TODO
@@ -35,8 +42,8 @@ Description: Build a search engine as part of a larger RAG project that looks at
 [ ] Complete `setup.py`
 [X] Validate TF-IDF on exact passage recall
 [X] Validate BM25 on exact passage recall
-[ ] Validate ReRank on exact passage recall
-[ ] Validate all search on more direct questions
+[X] Validate ReRank on exact passage recall
+[X] Validate all search on more direct questions
 [ ] Full RAG with small LLMs
 
 

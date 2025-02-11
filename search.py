@@ -33,7 +33,7 @@ import torch
 from tqdm import tqdm
 
 from preprocess import load_model, process_page
-from preprocess import bow_preprocessing#, vector_preprocessing
+from preprocess import bow_preprocessing, vector_preprocessing
 
 
 profiler = cProfile.Profile()
@@ -174,7 +174,7 @@ def cosine_similarity(vec1: List[float], vec2: List[float]):
 	return cosine
 	
 
-def print_results(results: List, search_type: str = "tf-idf") -> None:
+def print_results(results: List, search_type: str = "tf-idf", print_doc: bool = False) -> None:
 	valid_search_types = ["tf-idf", "bm25", "vector", "rerank"]
 	assert search_type in valid_search_types,\
 		f"Expected 'search_type' to be either {', '.join(valid_search_types)}. Received {search_type}"
@@ -198,7 +198,8 @@ def print_results(results: List, search_type: str = "tf-idf") -> None:
 		# Print the results out.
 		print(f"Score: {score}")
 		print(f"File Path: {document}")
-		print(f"Article Text:\n{text[indices[0]:indices[1]]}")
+		if print_doc:
+			print(f"Article Text:\n{text[indices[0]:indices[1]]}")
 
 
 class InvertedIndex:
@@ -1039,7 +1040,7 @@ class BM25(BagOfWords):
 			# frequencies for all words in the document. The sum of all
 			# document sizes is the sum of that value (document size) 
 			# for all documents in the corpus.
-			doc_size_sum += df["term_freq"].sum()
+			doc_size_sum += df["tf"].sum()
 
 		# Return the average document size.
 		return doc_size_sum / self.corpus_size
@@ -1318,7 +1319,7 @@ class BM25(BagOfWords):
 
 
 class VectorSearch:
-	def __init__(self, model: str, index_dir: str, device: str = "cpu"):
+	def __init__(self, index_dir: str, max_depth: int = 1, device: str = "cpu"):
 		# Detect config.json file.
 		assert os.path.exists("config.json"),\
 			"Expected config.json file to exist. File is required for using vector search engine."
@@ -1328,6 +1329,7 @@ class VectorSearch:
 			config = json.load(f)
 
 		self.config = config
+		model = config["vector-search_config"]["model"]
 		valid_models = config["models"]
 		valid_model_names = list(valid_models.keys())
 		assert model in valid_model_names,\
@@ -1350,16 +1352,12 @@ class VectorSearch:
 		# Assert that the index directory path string is not empty.
 		assert index_dir != "",\
 			"Argument 'index_dir' expected to be a valid directory path."
+		assert os.path.exists(index_dir), \
+			f"Expected path to vector DB {index_dir} to exist."
+		assert len(os.listdir(index_dir)) != 0, \
+			f"Path to vector DB is empty."
 		self.index_dir = index_dir
-
-		# Initialize the vector database.
-		self.initialize_vector_db(config)
-
-
-	def initialize_vector_db(self, config: Dict) -> None:
-		# Initialize index directory if it doesn't already exist.
-		if not os.path.exists(self.index_dir):
-			os.makedirs(self.index_dir, exist_ok=True)
+		self.max_depth = max_depth
 
 		# Initialize (if need be) and connect to the vector database.
 		uri = config["vector-search_config"]["db_uri"]
@@ -1367,16 +1365,16 @@ class VectorSearch:
 
 		# Load model dims to pass along to the schema init.
 		self.dims = config["models"][self.model_name]["dims"]
-
-		# Initialize schema (this will be passed to the database when 
-		# creating a new, empty table in the vector database).
-		self.schema = pa.schema([
-			pa.field("file", pa.utf8()),
-			pa.field("sha1", pa.utf8()),
-			pa.field("text_idx", pa.int32()),
-			pa.field("text_len", pa.int32()),
-			pa.field("vector", pa.list_(pa.float32(), self.dims))
-		])
+		
+		# Open the table with the given table name.
+		table_name = f"investopedia_depth{self.max_depth}"
+		current_table_names = self.db.table_names()
+		assert table_name in current_table_names,\
+			f"Table {table_name} was expected to exist in database."
+		
+		# Initialize the fresh table for the current query.
+		self.table = self.db.open_table(table_name)
+		self.table.create_index(metric="cosine", vector_column_name="vector")
 
 
 	def search(self, query: str, max_results: int = 50, document_ids: List = [], docs_are_results: bool = False):
@@ -1398,24 +1396,16 @@ class VectorSearch:
 			that text that is being returned (for BM25 and TF-IDF, 
 			those slices values are for the whole article).
 		'''
-
-		# TODO/NOTE:
-		# Current implementation of search involves "dynamic" embedding
-		# generation (meaning we generate embeddings at search 
-		# runtime). The plan was to originally have preprocess.py 
-		# generate the embeddings for the corpus so that lookup was 
-		# much faster with lancedb, however, the storage required far
-		# exceeded the general storage abilities of most consumer PCs
-		# as well as required substantial runtime to generate all 
-		# embeddings (if waiting around two weeks for the bag-of-words 
-		# preprocessing felt slow, then vector preprocessing was going 
-		# to be glacial in comparison). Hence why dynamic embedding 
-		# generation is implemented but has issues with scaling with 
-		# max_results. For this reason, a hard limit for max_results
-		# and the length of the document ids is set.
-
-		assert len(document_ids) > 0,\
-			f"Argument 'document_ids' is expected to be not empty. Received {document_ids}"
+		# NOTE:
+		# The original idea to compute embeddings on the fly was NOT a
+		# good idea. Even with a few thousand documents, the embedding 
+		# process ends up taking several hours to complete, 
+		# illustrating how generating embeddings at runtime/inference 
+		# does not scale. Since we're not dealing with a dataset on 
+		# the scale of Wikipedia, precomputing vectors in the 
+		# preprocess.py script is the best option. The only thing that 
+		# will be embedded by the model will be the input query.
+		# Additionally, a hard limit on the max_results does help too.
 
 		# If the hard limit for the number of document ids or 
 		# max_results is reached, print an error message and return an
@@ -1431,17 +1421,6 @@ class VectorSearch:
 		if docs_are_results:
 			results = copy.deepcopy(document_ids)
 			document_ids = [result[1] for result in results]
-		
-		# Hash the query. This hash will serve as the table name for
-		# the database.
-		table_name = hashSum(query)
-		current_table_names = self.db.table_names()
-		assert table_name not in current_table_names,\
-			f"Table hash was expected to not exist in database"
-		
-		# Initialize the fresh table for the current query.
-		self.db.create_table(table_name, schema=self.schema)
-		table = self.db.open_table(table_name)
 
 		# NOTE:
 		# Assumes query text will exist within model tokenizer's max 
@@ -1451,75 +1430,39 @@ class VectorSearch:
 		# Embed the query text.
 		query_embedding = self.embed_text(query)
 
-		# Iterate through the document ids.
-		for doc_idx in tqdm(range(len(document_ids))):
-			document_id = document_ids[doc_idx]
-			document, sha1 = os.path.basename(document_id).split(".xml")
-			document += ".xml"
-
-			# Load the article text. Loading from stage 1 search 
-			# results is faster than loading from file.
-			if docs_are_results:
-				article_text = results[doc_idx][2]
-			else:
-				article_text = load_article_text(document, [sha1])[0]
-
-			# Preprocess text (chunk it) for embedding.
-			chunk_metadata = vector_preprocessing(
-				article_text, self.config, self.tokenizer
+		# Search the table.
+		if len(document_ids) != 0:
+			# Build the filter string based on the document ids.
+			docs_for_query = ", ".join(
+				f"'{document}'" for document in document_ids
 			)
 
-			# Embed each chunk and update the metadata.
-			for idx, chunk in enumerate(chunk_metadata):
-				# Update/add the metadata for the source filename
-				# and article SHA1.
-				chunk.update({"file": document, "sha1": sha1})
-
-				# Get original text chunk from text.
-				text_idx = chunk["text_idx"]
-				text_len = chunk["text_len"]
-				text_chunk = article_text[text_idx: text_idx + text_len]
-
-				# Embed the text chunk.
-				embedding = self.embed_text(text_chunk)
-
-				# NOTE:
-				# Originally I had embeddings stored into the metadata
-				# dictionary under the "embedding", key but lancddb
-				# requires the embedding data be under the "vector"
-				# name.
-
-				# Update the chunk dictionary with the embedding
-				# and set the value of that chunk in the metadata
-				# list to the (updated) chunk.
-				# chunk.update({"embedding": embedding})
-				chunk.update({"vector": embedding})
-				chunk_metadata[idx] = chunk
-
-		# Add chunk metadata to the vector database. Should be on
-		# "append" mode by default.
-		table.add(chunk_metadata, mode="append")
-
-		# Search the table.
-		results = table.search(query_embedding).limit(max_results)
-		results = results.to_list()
+			results = self.table.search(query_embedding)\
+				.where(f"file IN ({docs_for_query})")\
+				.limit(max_results)\
+				.to_list()
+		else:
+			results = self.table.search(query_embedding)\
+				.limit(max_results)\
+				.to_list()
+	
+		# Convert results to a list.
+		assert results is not None
+		assert isinstance(results, list)
 
 		# Format search results.
 		results = [
 			tuple([
 				result["_distance"], 
-				result["file"] + result["SHA1"], 
-				load_article_text(result["file"], [result["SHA1"]]),
+				result["file"], 
+				load_article_text(result["file"]),
 				[
-					result["text_idx"], 
-					result["text_idx"] + result["text_len"]
+					result["start_end_indices"][0],
+					result["start_end_indices"][1]
 				]
 			])
 			for result in results
 		]
-
-		# Clear table.
-		self.db.drop_table(table_name)
 
 		# Return the search results.
 		return results
@@ -1558,15 +1501,14 @@ class VectorSearch:
 
 
 class ReRankSearch:
-	def __init__(self, bow_path: str, index_path: str, model: str, 
-			  	corpus_size: int=-1, avg_doc_len: float=-1.0,
+	def __init__(self, bow_path: str, index_path: str,
+			  	corpus_size: int = -1, avg_doc_len: float = -1.0,
 				srt: float = -1.0, use_json: bool = False, 
 				k1: float = 1.0, b: float = 0.0, device: str = "cpu",
-				use_tf_idf: bool = False):
+				use_tf_idf: bool = False, max_depth: int = 1):
 		# Set class variables.
 		self.bow_dir = bow_path
 		self.index_dir = index_path
-		self.model = model
 		self.corpus_size = corpus_size
 		self.avg_corpus_len = avg_doc_len
 		self.srt = srt
@@ -1575,6 +1517,7 @@ class ReRankSearch:
 		self.b = b
 		self.use_tfidf = use_tf_idf
 		self.device = device
+		self.max_depth = max_depth
 
 		# Initialize search objects.
 		self.tf_idf, self.bm25 = None, None
@@ -1591,7 +1534,7 @@ class ReRankSearch:
 				srt=self.srt, use_json=self.use_json
 			)
 		self.vector_search = VectorSearch(
-			self.model, self.index_dir, self.device
+			self.index_dir, self.max_depth, self.device
 		)
 
 		# Organize search into stages.

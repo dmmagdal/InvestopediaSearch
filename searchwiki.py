@@ -19,10 +19,9 @@ from bs4 import BeautifulSoup
 from nltk.tokenize import word_tokenize
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline
-from transformers import BatchEncoding
 
-from preprocess import load_model, process_page, vector_preprocessing
-from search import TF_IDF, BM25#, VectorSearch, ReRankSearch
+from preprocess import process_page
+from search import TF_IDF, BM25, VectorSearch, ReRankSearch
 from search import print_results
 
 
@@ -117,7 +116,7 @@ def test(args: Namespace) -> None:
 		config = json.load(f)
 
 	bow_dir = "./metadata/bag_of_words"
-	index_dir = "./test-temp"
+	index_dir = "./vector_data/vector_db"
 
 	assert args.max_depth > 0, \
 		f"Invalid --max_depth value was passed in (must be > 0, recieved {args.max_depth})"
@@ -155,7 +154,8 @@ def test(args: Namespace) -> None:
 	tf_idf = TF_IDF(
 		bow_dir,
 		depth=args.max_depth, 
-		corpus_size=tfidf_corpus_size
+		corpus_size=tfidf_corpus_size,
+		use_json=args.use_json
 	)
 	search_1_init_end = time.perf_counter()
 	search_1_init_elapsed = search_1_init_end - search_1_init_start
@@ -166,29 +166,42 @@ def test(args: Namespace) -> None:
 		bow_dir, 
 		depth=args.max_depth,
 		corpus_size=bm25_corpus_size, 
-		avg_doc_len=bm25_avg_doc_len
+		avg_doc_len=bm25_avg_doc_len,
+		use_json=args.use_json
 	)
 	search_2_init_end = time.perf_counter()
 	search_2_init_elapsed = search_2_init_end - search_2_init_start
 	print(f"Time to initialize BM25 search: {search_2_init_elapsed:.6f} seconds")
 	
-	# search_3_init_start = time.perf_counter()
-	# vector_search = VectorSearch()
-	# search_3_init_end = time.perf_counter()
-	# search_3_init_elapsed = search_3_init_end - search_3_init_start
-	# print(f"Time to initialize Vector search: {search_3_init_elapsed:.6f} seconds")
+	search_3_init_start = time.perf_counter()
+	vector_search = VectorSearch(
+		index_dir,
+		args.max_depth,
+		device
+	)
+	search_3_init_end = time.perf_counter()
+	search_3_init_elapsed = search_3_init_end - search_3_init_start
+	print(f"Time to initialize Vector search: {search_3_init_elapsed:.6f} seconds")
 
-	# search_4_init_start = time.perf_counter()
-	# rerank = ReRankSearch(bow_dir, index_dir, model, device=device)
-	# search_4_init_end = time.perf_counter()
-	# search_4_init_elapsed = search_4_init_end - search_4_init_start
-	# print(f"Time to initialize Rerank search: {search_4_init_elapsed:.6f} seconds")
+	search_4_init_start = time.perf_counter()
+	rerank = ReRankSearch(
+		bow_dir, 
+		index_dir, 
+		corpus_size=bm25_corpus_size,
+		avg_doc_len=bm25_avg_doc_len,
+		device=device,
+		use_tf_idf=False,
+		use_json=args.use_json
+	)
+	search_4_init_end = time.perf_counter()
+	search_4_init_elapsed = search_4_init_end - search_4_init_start
+	print(f"Time to initialize Rerank search: {search_4_init_elapsed:.6f} seconds")
 
 	search_engines = [
 		("tf-idf", tf_idf), 
 		("bm25", bm25), 
-		# ("vector", vector_search),
-		# ("rerank", rerank)
+		("vector", vector_search),
+		("rerank", rerank)
 	]
 
 	###################################################################
@@ -249,11 +262,11 @@ def test(args: Namespace) -> None:
 
 	# Iterate through each search engine (sparse vector search engines 
 	# like BM25 or TF-IDF).
-	for name, engine in search_engines[:2]:
+	for name, engine in search_engines:#[:2]:
 		# Skip vector search because it is not designed/optimized for 
 		# scaling (even more so at inference time).
-		if name == "vector":
-			continue
+		# if name == "vector":
+		# 	continue
 
 		# Search engine banner text.
 		print(f"Searching with {name}")
@@ -272,7 +285,7 @@ def test(args: Namespace) -> None:
 			# Print out the search time and the search results.
 			print(f"Search returned in {query_search_elapsed:.6f} seconds")
 			print()
-			print_results(results, search_type=name)
+			print_results(results, search_type=name, print_doc=args.print_docs)
 
 			# Get top-k accuracy.
 			found_index = -1
@@ -331,12 +344,54 @@ def test(args: Namespace) -> None:
 			weights=[len(text) for text in split_text]	
 		)
 
-		# file_passages.append((file, build_query(text, device)))
-		file_passages.append((file, build_query(text)))
+		file_passages.append((file, build_query(text, device)))
+		# file_passages.append((file, build_query(text)))
 	
 	for name, engine in search_engines:
-		pass
-	pass
+		# Search engine banner text.
+		print(f"Searching with {name}")
+		search_times = []
+
+		# Iterate through each passage and run the search with the 
+		# search engine.
+		for file, query in query_passages:
+			# Run the search and track the time it takes to run the 
+			# search.
+			query_search_start = time.perf_counter()
+			results = engine.search(query)
+			query_search_end = time.perf_counter()
+			query_search_elapsed = query_search_end - query_search_start
+
+			# Print out the search time and the search results.
+			print(f"Search returned in {query_search_elapsed:.6f} seconds")
+			print()
+			print_results(results, search_type=name, print_doc=args.print_docs)
+
+			# Get top-k accuracy.
+			found_index = -1
+			for idx, result in enumerate(results):
+				if file == result[1]:
+					found_index = idx + 1
+			
+			if found_index < 0:
+				print(f"Target article was not found in search (top-50)")
+			else:
+				print(f"Target article was found in search (top-50) in position: {found_index}")
+			
+			for k in [5, 10, 25, 50]:
+				print(f"top-{k}: {found_index <= k and found_index > -1}")
+
+			# Append the search time to a list.
+			search_times.append(query_search_elapsed)
+
+		# Compute and print the average search time.
+		assert len(search_times) != 0, \
+			"Expected there to be sufficient queries to the search engines. Recieved 0."
+		avg_search_time = sum(search_times) / len(search_times)
+		print(f"Average search time: {avg_search_time:.6f} seconds")
+		print("=" * 72)
+	
+	return
 
 
 def search_loop() -> None:
@@ -354,7 +409,7 @@ def search_loop() -> None:
 	print(title)
 	print()
 	search_query = input("> ")
-	pass
+	return 
 
 
 def main() -> None:
@@ -376,23 +431,28 @@ def main() -> None:
 		action="store_true",
 		help="Whether to read from JSON or msgpack files. Default is false/not specified."
 	)
-	parser.add_argument(
-		"--num_proc",
-		type=int,
-		default=1,
-		help="How many processors to use. Default is 1."
-	)
-	parser.add_argument(
-		"--num_thread",
-		type=int,
-		default=1,
-		help="How many threads to use. Default is 1."
-	)
+	# parser.add_argument(
+	# 	"--num_proc",
+	# 	type=int,
+	# 	default=1,
+	# 	help="How many processors to use. Default is 1."
+	# )
+	# parser.add_argument(
+	# 	"--num_thread",
+	# 	type=int,
+	# 	default=1,
+	# 	help="How many threads to use. Default is 1."
+	# )
 	parser.add_argument(
 		"--max_depth",
 		type=int,
 		default=1,
 		help="How deep should the graph traversal go across links. Default is 1/not specified."
+	)
+	parser.add_argument(
+		"--print_docs",
+		action="store_true",
+		help="Whether to print out the entire document text when printing the results. Default is false/not specified."
 	)
 	args = parser.parse_args()
 
